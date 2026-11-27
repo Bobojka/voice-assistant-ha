@@ -47,3 +47,13 @@ def test_guess_from_text():
     assert guess_from_text([garland, lamp], "Вимкни гірлянду") == [garland]
     assert guess_from_text([garland, lamp], "вимкни все") == []
     assert guess_from_text([garland, scene, lamp], "вимкни гірлянду", ("scene",)) == [garland]
+
+
+async def test_spoken_name_prefers_alias(hass):
+    from homeassistant.helpers import entity_registry as er
+    from custom_components.voice_assistant_ha.devices import spoken_name
+    reg = er.async_get(hass)
+    e = reg.async_get_or_create("light", "test", "g1", suggested_object_id="garland")
+    assert spoken_name(hass, e.entity_id, "garland Гірлянда") == "garland Гірлянда"
+    reg.async_update_entity(e.entity_id, aliases={"Гірлянда"})
+    assert spoken_name(hass, e.entity_id, "garland Гірлянда") == "Гірлянда"

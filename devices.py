@@ -78,6 +78,16 @@ def exposed_targets(hass: HomeAssistant, skip: set[str]) -> list[Target]:
     return targets
 
 
+def spoken_name(hass: HomeAssistant, entity_id: str, fallback: str) -> str:
+    """How to name the entity in an answer: its first alias (the household's own
+    word, e.g. «Гірлянда» for «garland Гірлянда»), else the given name."""
+    entry = er.async_get(hass).async_get(entity_id)
+    for alias in (entry.aliases if entry else ()) or ():
+        if isinstance(alias, str) and alias.strip():
+            return alias.strip()
+    return fallback
+
+
 def label_of(t: Target) -> str:
     return f"{t.name} ({t.area})" if t.area else str(t.name)
 

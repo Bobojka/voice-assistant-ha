@@ -511,8 +511,9 @@ class VoiceAgent(conversation.ConversationEntity):
         done: list[str] = []
         try:
             if name == dev.STATE:
-                reply.say(" ".join(dev.describe_state(t.name, self.hass.states.get(t.entity_id))
-                                   for t in targets[:5]))
+                reply.say(" ".join(dev.describe_state(
+                    dev.spoken_name(self.hass, t.entity_id, t.name), self.hass.states.get(t.entity_id))
+                    for t in list({t.entity_id: t for t in targets}.values())[:5]))
                 return None
             for t in targets:
                 if name in (dev.ON_OFF, dev.ACTIVATE):
