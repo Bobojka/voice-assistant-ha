@@ -1,0 +1,33 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Голосовий асистент",
+        "description": "Адреса сервісу voice-assistant (HTTP API transcribe-nlp) і його Bearer-токен.",
+        "data": {
+          "url": "Адреса сервісу",
+          "token": "Токен"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Сервіс недоступний (GET /health не відповідає)."
+    },
+    "abort": {
+      "already_configured": "Цей сервіс уже налаштовано."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Голосовий асистент",
+        "data": {
+          "label": "Мітка голосових скриптів",
+          "assistant_name": "Ім'я асистента",
+          "min_confidence": "Перепитувати, якщо впевненість нижча за",
+          "fallback_agent": "Запасний агент (entity id, 'none' — вимкнути)"
+        }
+      }
+    }
+  }
+}

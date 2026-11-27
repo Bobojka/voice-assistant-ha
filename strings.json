@@ -1,0 +1,33 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Voice Assistant",
+        "description": "Address of the voice-assistant service (transcribe-nlp HTTP API) and its Bearer token.",
+        "data": {
+          "url": "Service URL",
+          "token": "Token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the service (GET /health failed)."
+    },
+    "abort": {
+      "already_configured": "This service is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Voice Assistant",
+        "data": {
+          "label": "Label of voice scripts",
+          "assistant_name": "Assistant name",
+          "min_confidence": "Ask to confirm below this confidence",
+          "fallback_agent": "Fallback agent (entity id, 'none' to disable)"
+        }
+      }
+    }
+  }
+}
