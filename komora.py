@@ -54,11 +54,14 @@ def build_intents() -> list[dict[str, Any]]:
          "examples": ["списати два резистори", "я використав пів літра молока",
                       "викинула пачку сиру", "з'їли три яйця"]},
         {"name": RECEIVE,
-         "description": "Щось купили або принесли додому — записати надходження в Комору.",
+         "description": "Щось купили або принесли додому — записати надходження в Комору. Сюди ж "
+                        "«створи/додай позицію X, N штук» (нову позицію Комора створить сама).",
          "slots": [_ITEM, _QTY, _UNIT],
-         "examples": ["купив молоко", "надійшло десять резисторів", "принесла два кілограми картоплі"]},
+         "examples": ["купив молоко", "надійшло десять резисторів", "принесла два кілограми картоплі",
+                      "створи позицію оптопара EL817 десять штук"]},
         {"name": SHOPPING_ADD,
-         "description": "Додати щось до списку покупок Комори (треба купити).",
+         "description": "Додати щось до списку покупок Комори (треба купити). Лише якщо сказали "
+                        "про покупки/купити; «додай X N штук» без слова покупки — це надходження.",
          "slots": [_ITEM, _QTY],
          "examples": ["додай хліб у покупки", "треба купити молоко", "запиши купити батарейки"]},
         {"name": SHOPPING_LIST,
@@ -148,11 +151,16 @@ async def run(hass: HomeAssistant, name: str, slots: dict[str, Any], context: Co
     except HomeAssistantError as err:
         return f"Комора не відповіла: {err}"
 
-    what = str((res or {}).get("name") or item)
+    res = res or {}
+    what = str(res.get("name") or item)
     amount = _qty(slots.get("qty"), slots.get("unit")) if slots.get("qty") is not None else ""
     suffix = f", {amount}" if amount else ""
+    new = ""
+    if res.get("created"):
+        cats = res.get("categories") or []
+        new = f"Нова позиція «{what}»" + (f" ({cats[0].split(' / ')[-1]})" if cats else "") + ". "
     if name == WRITE_OFF:
         return f"Списала: {what}{suffix}."
     if name == RECEIVE:
-        return f"Записала надходження: {what}{suffix}."
-    return f"Додала до покупок: {what}{suffix}."
+        return f"{new}Записала надходження: {what}{suffix}."
+    return f"{new}Додала до покупок: {what}{suffix}."

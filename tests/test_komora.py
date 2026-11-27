@@ -29,6 +29,9 @@ def fake_komora(hass: HomeAssistant) -> list[ServiceCall]:
         if call.data["item"] == "єдиноріг":
             raise ServiceValidationError("not found", translation_domain="komora",
                                          translation_key="item_not_found")
+        if call.data["item"].startswith("оптопара"):
+            return {"item_id": 30, "name": "Оптопара EL817CF", "created": True,
+                    "categories": ["Електроніка / Оптрони"]}
         return {"item_id": 7, "name": "Молоко 2,5%"}
 
     hass.services.async_register("komora", "find", find, supports_response=SupportsResponse.ONLY)
@@ -90,3 +93,12 @@ async def test_unknown_item(hass, setup, aioclient_mock):
     match(aioclient_mock, komora.SHOPPING_ADD, {"item": "єдиноріг"})
     result = await converse(hass, agent_id, "додай єдинорога в покупки")
     assert result.response.speech["plain"]["speech"] == "Не знайшла в Коморі «єдиноріг»."
+
+
+async def test_new_item_is_announced(hass, setup, aioclient_mock):
+    _, agent_id = setup
+    fake_komora(hass)
+    match(aioclient_mock, komora.RECEIVE, {"item": "оптопара EL817CF", "qty": 10, "unit": "pcs"})
+    result = await converse(hass, agent_id, "створи позицію оптопара EL817CF 10 штук")
+    assert result.response.speech["plain"]["speech"] == \
+        "Нова позиція «Оптопара EL817CF» (Оптрони). Записала надходження: Оптопара EL817CF, 10 шт."
