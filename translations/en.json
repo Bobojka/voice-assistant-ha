@@ -37,7 +37,8 @@
           "loud_db": "Loud request, dBFS",
           "follow_up": "Keep listening after a command on a satellite (no wake word for «and also ...»)",
           "home_areas": "Each person's room, one per line: person.name = Room (default for commands without a room)",
-          "reset_habits": "Forget learned habits (which room each person usually means)"
+          "reset_habits": "Forget learned habits (which room each person usually means)",
+          "telegram_fallback": "Telegram: when nothing matched, ask the fallback agent too (off: stay silent, the bot may serve other services)"
         }
       }
     },

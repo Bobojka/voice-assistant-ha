@@ -32,6 +32,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import ulid
 
 from . import devices as dev
+from . import komora
 from . import loudness
 from .catalog import Command, build_catalog, describe_slots, yes_no
 from .client import ServiceError, VoiceServiceClient
@@ -83,6 +84,7 @@ class Pending:
     follow: bool = False  # not a question: listening on after a done command
 
 
+READ_ONLY = {dev.STATE, komora.STOCK, komora.SHOPPING_LIST}
 THANKS = {"дякую", "спасибі", "дякс", "дякую тобі", "дуже дякую"}
 STOP = THANKS | {"все", "усе", "стоп", "ні", "нічого", "досить", "не треба", "відбій", "забудь"}
 
@@ -203,6 +205,12 @@ class VoiceAgent(conversation.ConversationEntity):
                     script=spec["name"], title=dev.TITLES[spec["name"]],
                     fields={"device": "пристрій", "area": "кімната", "action": "дія",
                             "value": "значення", "name": "назва", "kind": "група"},
+                    required=[sl["name"] for sl in spec["slots"] if sl.get("required")])
+        if komora.available(self.hass):
+            for spec in komora.build_intents():
+                intents.append(spec)
+                commands[spec["name"]] = Command(
+                    script=spec["name"], title=komora.TITLES[spec["name"]], fields=komora.FIELDS,
                     required=[sl["name"] for sl in spec["slots"] if sl.get("required")])
         return intents, commands
 
@@ -381,7 +389,7 @@ class VoiceAgent(conversation.ConversationEntity):
                 return
 
             # Asking the state changes nothing: no need to confirm it.
-            if (not confirmed and command.script != dev.STATE
+            if (not confirmed and command.script not in READ_ONLY
                     and float(match.get("confidence", 1.0)) < min_conf):
                 details = describe_slots(command, slots)
                 question = f"Виконати «{command.title}»{': ' + details if details else ''}?"
@@ -397,6 +405,10 @@ class VoiceAgent(conversation.ConversationEntity):
                                                options=options))
                     reply.ask(question)
                     return
+                continue
+
+            if command.script.startswith(komora.PREFIX):
+                reply.say(await komora.run(self.hass, command.script, slots, user_input.context))
                 continue
 
             response = await self._call_script(user_input, command, slots, reply)

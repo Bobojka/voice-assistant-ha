@@ -20,6 +20,7 @@ CONF_QUIET_DB = "quiet_db"
 CONF_LOUD_DB = "loud_db"
 CONF_TG_TOKEN = "telegram_token"
 CONF_TG_USERS = "telegram_users"
+CONF_TG_FALLBACK = "telegram_fallback"
 
 DEFAULT_URL = "http://192.168.88.100:8300"
 DEFAULT_LABEL = "Голос"

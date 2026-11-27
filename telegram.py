@@ -25,7 +25,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Context, HomeAssistant
 
 from .client import ServiceError, VoiceServiceClient
-from .const import CONF_DEVICES, CONF_LABEL, DEFAULT_LABEL, DOMAIN
+from .const import CONF_DEVICES, CONF_LABEL, CONF_TG_FALLBACK, DEFAULT_LABEL, DOMAIN
 from .vocabulary import build_vocabulary
 
 _LOGGER = logging.getLogger(__name__)
@@ -212,7 +212,8 @@ class TelegramBridge:
                 conversation_id=conv_id, device_id=None, satellite_id=None,
                 language=self.hass.config.language or "uk", agent_id=agent.entity_id,
             ),
-            silent=True,
+            # the same bot may serve other services: no fallback unless asked for
+            silent=not agent.entry.options.get(CONF_TG_FALLBACK, False),
         )
         speech = (result.response.speech.get("plain") or {}).get("speech", "").strip()
         if not speech:

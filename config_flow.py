@@ -25,6 +25,7 @@ from .const import (
     CONF_MIN_CONFIDENCE,
     CONF_QUIET_DB,
     CONF_RESET_HABITS,
+    CONF_TG_FALLBACK,
     CONF_TG_TOKEN,
     CONF_TG_URL,
     CONF_TG_USERS,
@@ -85,6 +86,7 @@ def _options_schema(values: dict[str, Any]) -> vol.Schema:
             selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)),
         vol.Optional(CONF_TG_USERS, default=values.get(CONF_TG_USERS, "")): selector.TextSelector(
             selector.TextSelectorConfig(multiline=True)),
+        vol.Required(CONF_TG_FALLBACK, default=values.get(CONF_TG_FALLBACK, False)): bool,
     })
 
 
