@@ -12,8 +12,10 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 
 from . import devices as dev
+from . import komora
 
 VERBS = ["увімкни", "вимкни", "постав", "зроби", "температура", "яскравість", "гучність"]
+KOMORA_WORDS = ["скільки залишилось", "Комора", "списати", "купив", "додай у покупки"]
 
 
 def build_vocabulary(hass: HomeAssistant, label_name: str, with_devices: bool) -> list[str]:
@@ -39,7 +41,8 @@ def build_vocabulary(hass: HomeAssistant, label_name: str, with_devices: bool) -
         devices = [t.name for t in targets]
 
     out: dict[str, None] = {}
-    for word in (*VERBS, *areas, *devices, *scripts):
+    extra = KOMORA_WORDS if komora.available(hass) else []
+    for word in (*VERBS, *extra, *areas, *devices, *scripts):
         word = " ".join(str(word).replace(",", " ").split())
         if word and word.casefold() not in {w.casefold() for w in out}:
             out[word] = None
