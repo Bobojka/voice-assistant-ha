@@ -176,8 +176,10 @@ async def test_buttons_of_others_and_strangers(hass, bridge, aioclient_mock):
 
 
 async def test_group_chats_are_ignored(hass, bridge, aioclient_mock):
-    await bridge.handle({"update_id": 1, "message": {
+    b, calls, _ = bridge
+    await b.handle({"update_id": 1, "message": {
         "message_id": 5, "from": {"id": 983470091}, "text": "іди",
         "chat": {"id": -100123, "type": "supergroup"}}})
+    assert calls == []
     assert not [c for c in aioclient_mock.mock_calls if "/v1/match" in str(c[1])]
-    assert not [c for c in aioclient_mock.mock_calls if "setMessageReaction" in str(c[1])]
+    assert sent(aioclient_mock, "setMessageReaction") == []
