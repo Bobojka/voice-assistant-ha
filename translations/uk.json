@@ -29,12 +29,12 @@
           "devices": "Універсальні команди для пристроїв, відкритих для Assist",
           "telegram_url": "Telegram: адреса Bot API (tg-proxy, напр. http://192.168.88.100:8310, або https://api.telegram.org)",
           "telegram_token": "Telegram: токен (токен підписника в tg-proxy)",
-          "telegram_users": "Telegram: хто може давати команди, по рядку: <telegram id> = person.<ім'я>"
+          "telegram_users": "Telegram: хто може давати команди, по рядку: telegram_id = person.імʼя (напр. 983470091 = person.dima)"
         }
       }
     },
     "error": {
-      "bad_users": "Кожен рядок: <telegram id> = person.<ім'я>",
+      "bad_users": "Кожен рядок: telegram_id = person.імʼя, напр. 983470091 = person.dima",
       "unknown_person": "Такої людини (person) у Home Assistant немає"
     }
   }
