@@ -462,6 +462,8 @@ class VoiceAgent(conversation.ConversationEntity):
             targets = dev.resolve(self._targets, {"device": slots.get("name")}, dev.ACTIVATABLE)
         else:
             targets = dev.resolve(self._targets, slots)
+            if not targets and not any(slots.get(k) for k in ("device", "area", "kind")):
+                targets = dev.guess_from_text(self._targets, user_input.text, dev.ACTIVATABLE)
         if not targets:
             return "Який саме пристрій?", "device", []
 

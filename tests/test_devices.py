@@ -37,3 +37,13 @@ def test_vacuum_and_humidifier_states():
     assert dev.describe_state("Пилосос", State("vacuum.r", "docked")) == "Пилосос: на базі."
     h = State("humidifier.h", "on", {"humidity": 55, "current_humidity": 36})
     assert dev.describe_state("Зволожувач", h) == "Зволожувач: увімкнено, задано 55%, зараз 36%."
+
+
+def test_guess_from_text():
+    from custom_components.voice_assistant_ha.devices import Target, guess_from_text
+    garland = Target("light.balkon_garland_girlianda", "Гірлянда", "Балкон")
+    lamp = Target("light.lamp", "Лампа", "Вітальня")
+    scene = Target("scene.girlianda", "Гірлянда святкова", None)
+    assert guess_from_text([garland, lamp], "Вимкни гірлянду") == [garland]
+    assert guess_from_text([garland, lamp], "вимкни все") == []
+    assert guess_from_text([garland, scene, lamp], "вимкни гірлянду", ("scene",)) == [garland]

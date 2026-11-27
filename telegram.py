@@ -146,8 +146,8 @@ class TelegramBridge:
             return  # not one of ours: someone else's service may answer
         chat_id = msg["chat"]["id"]
         text = (msg.get("text") or "").strip()
-        if text.startswith("/"):
-            return  # bot commands belong to other services
+        if text[:1] in ("/", "+", "-", "−", "?"):
+            return  # bot commands and Komora's «+молоко 2», «?рис» belong to other services
         audio = msg.get("voice") or msg.get("audio")
         heard = False
         if not text and audio:

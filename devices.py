@@ -186,6 +186,21 @@ def resolve(targets: list[Target], slots: dict[str, Any],
     return out
 
 
+def _stems(text: str) -> set[str]:
+    words = "".join(c if c.isalnum() else " " for c in text.casefold()).split()
+    return {w[:5] if len(w) >= 6 else w[:-1] for w in words if len(w) >= 4}
+
+
+def guess_from_text(targets: list[Target], text: str,
+                    exclude: tuple[str, ...] = ()) -> list[Target]:
+    """The service sometimes leaves the device empty («вимкни гірлянду»): take the
+    devices whose name shares a word stem with the phrase, if they all share one name."""
+    said = _stems(text)
+    found = [t for t in targets
+             if t.entity_id.split(".")[0] not in exclude and said & _stems(str(t.name))]
+    return found if len({t.name for t in found}) == 1 else []
+
+
 def on_off_call(entity_id: str, action: str) -> tuple[str, str]:
     domain = entity_id.split(".")[0]
     if domain == "cover":
