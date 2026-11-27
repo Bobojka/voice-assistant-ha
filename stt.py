@@ -46,6 +46,11 @@ def to_wav(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:
     return buf.getvalue()
 
 
+# Below this the request is taken as silence (voice level, and voice over noise), dB.
+SILENT_DB = -50.0
+MIN_SNR_DB = 12.0
+
+
 class VoiceSTT(stt.SpeechToTextEntity):
     def __init__(self, entry: ConfigEntry) -> None:
         self.entry = entry
@@ -92,13 +97,18 @@ class VoiceSTT(stt.SpeechToTextEntity):
             self.hass, opts.get(CONF_LABEL, DEFAULT_LABEL), opts.get(CONF_DEVICES, True))
         client: VoiceServiceClient = self.entry.runtime_data
         request_id = ulid.ulid_now()
-        try:
-            text = await client.transcribe(
-                to_wav(bytes(pcm)), metadata.language.split("-")[0], vocabulary, request_id)
-        except ServiceError as err:
-            _LOGGER.warning("STT failed (%s): %s", request_id, err)
-            return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
-        _LOGGER.debug("STT %s: %r (hints: %s)", request_id, text, ", ".join(vocabulary))
+        if level.speech_db < SILENT_DB or level.speech_db - level.noise_db < MIN_SNR_DB:
+            # Nobody spoke: Whisper would make up «Дякую.» or similar out of the hiss.
+            _LOGGER.debug("STT %s: silence, not sent", request_id)
+            text = ""
+        else:
+            try:
+                text = await client.transcribe(
+                    to_wav(bytes(pcm)), metadata.language.split("-")[0], vocabulary, request_id)
+            except ServiceError as err:
+                _LOGGER.warning("STT failed (%s): %s", request_id, err)
+                return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
+            _LOGGER.debug("STT %s: %r (hints: %s)", request_id, text, ", ".join(vocabulary))
         if not text and self.hass.data.get(DOMAIN, {}).get("follow_up_until", 0) > time.monotonic():
             # The agent is listening on: silence ends the talk quietly, not with an error beep.
             self.hass.data[DOMAIN]["follow_up_until"] = 0

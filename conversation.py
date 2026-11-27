@@ -315,6 +315,11 @@ class VoiceAgent(conversation.ConversationEntity):
             if answer is False:
                 reply.say("Добре, скасовано.")
                 return reply.result(conv_id)
+            if len(_norm(text).split()) <= 3:
+                # misheard «так»/«ні» (or Whisper's «Дякую.»): ask again, keep the question
+                self._ask(conv_id, pending)
+                reply.ask(f"Не розчула. {pending.question} Так чи ні?")
+                return reply.result(conv_id)
             pending = None  # something else: a new command
 
         # 2. The value of a missing field.

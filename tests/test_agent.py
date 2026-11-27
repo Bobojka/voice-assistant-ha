@@ -1,5 +1,8 @@
 """End-to-end through Home Assistant: label + script -> agent -> service (mocked) -> script."""
 
+import math
+from array import array
+
 import pytest
 from homeassistant.components import conversation
 from homeassistant.core import Context, HomeAssistant, ServiceCall
@@ -11,6 +14,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.voice_assistant_ha.const import DOMAIN
 
 URL = "http://voice.test:8300"
+
+# half a second of quiet, then half a second of a 300 Hz tone: someone spoke
+SPEECH = b"\x00\x00" * 8000 + array("h", (int(8000 * math.sin(2 * math.pi * 300 * i / 16000))
+                                           for i in range(8000))).tobytes()
 
 
 @pytest.fixture(autouse=True)
@@ -214,7 +221,7 @@ async def test_stt_sends_home_words(hass: HomeAssistant, setup, aioclient_mock):
         if e.platform == DOMAIN and e.domain == "stt"))
 
     async def audio():
-        yield b"\x00\x00" * 1600
+        yield SPEECH
 
     meta = stt.SpeechMetadata(language="uk-UA", format=stt.AudioFormats.WAV,
                               codec=stt.AudioCodecs.PCM, bit_rate=16, sample_rate=16000,
@@ -238,10 +245,42 @@ async def test_stt_service_down(hass: HomeAssistant, setup, aioclient_mock):
         if e.platform == DOMAIN and e.domain == "stt"))
 
     async def audio():
-        yield b"\x00\x00" * 160
+        yield SPEECH
 
     meta = stt.SpeechMetadata(language="uk", format=stt.AudioFormats.WAV,
                               codec=stt.AudioCodecs.PCM, bit_rate=16, sample_rate=16000,
                               channel=1)
     result = await entity.async_process_audio_stream(meta, audio())
     assert result.result == stt.SpeechResultState.ERROR
+
+
+async def test_unclear_answer_to_confirmation_asks_again(hass, setup, aioclient_mock):
+    calls, agent_id = setup
+    aioclient_mock.post(f"{URL}/v1/match", json={"matches": [
+        {"intent": "spysaty", "slots": {"product": "Молоко"}, "confidence": 0.4, "warnings": []}]})
+    first = await converse(hass, agent_id, "молоко щось")
+    again = await converse(hass, agent_id, "Дякую. Дякую.", first.conversation_id)
+    assert again.continue_conversation is True
+    assert again.response.speech["plain"]["speech"].startswith("Не розчула.")
+    assert calls == []
+    done = await converse(hass, agent_id, "так", first.conversation_id)
+    assert calls[0].data["product"] == "Молоко"
+    assert done.response.speech["plain"]["speech"] == "Записала: Молоко."
+
+
+async def test_stt_silence_is_not_sent(hass, setup, aioclient_mock):
+    from homeassistant.components import stt
+    entity = stt.async_get_speech_to_text_entity(hass, next(
+        e.entity_id for e in er.async_get(hass).entities.values()
+        if e.platform == DOMAIN and e.domain == "stt"))
+
+    async def audio():
+        yield b"\x01\x00\xff\xff" * 8000  # hiss only
+
+    meta = stt.SpeechMetadata(language="uk", format=stt.AudioFormats.WAV, codec=stt.AudioCodecs.PCM,
+                              bit_rate=stt.AudioBitRates.BITRATE_16,
+                              sample_rate=stt.AudioSampleRates.SAMPLERATE_16000,
+                              channel=stt.AudioChannels.CHANNEL_MONO)
+    result = await entity.async_process_audio_stream(meta, audio())
+    assert result.text == ""
+    assert not [c for c in aioclient_mock.mock_calls if "transcribe" in str(c[1])]
