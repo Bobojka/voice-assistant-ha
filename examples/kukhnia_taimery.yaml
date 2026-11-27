@@ -1,0 +1,324 @@
+# Кухонні таймери й нагадування для голосового асистента (voice_assistant_ha).
+# Пакет HA: файл кладеться в /config/packages/kukhnia_taimery.yaml.
+# Скрипти з цього файлу треба позначити міткою «Голос» (Налаштування → Автоматизації та сцени →
+# Скрипти → скрипт → ⋮ → Мітки), інакше агент їх не побачить.
+# Повідомлення йдуть через smart_notify, категорія «kukhnia» (створити в «Smart Notify · Категорії»).
+
+timer:
+  kukhnia_1:
+    name: Кухня таймер 1
+    icon: mdi:timer-outline
+    restore: true
+  kukhnia_2:
+    name: Кухня таймер 2
+    icon: mdi:timer-outline
+    restore: true
+  kukhnia_3:
+    name: Кухня таймер 3
+    icon: mdi:timer-outline
+    restore: true
+
+input_text:
+  # На що поставлено таймер («макарони») і хто ставив (user_id людини, порожньо — сателіт).
+  kukhnia_1_nazva: {name: Кухня таймер 1 назва, max: 60}
+  kukhnia_1_khto: {name: Кухня таймер 1 хто, max: 64}
+  kukhnia_2_nazva: {name: Кухня таймер 2 назва, max: 60}
+  kukhnia_2_khto: {name: Кухня таймер 2 хто, max: 64}
+  kukhnia_3_nazva: {name: Кухня таймер 3 назва, max: 60}
+  kukhnia_3_khto: {name: Кухня таймер 3 хто, max: 64}
+
+script:
+  taimer_start:
+    alias: Поставити таймер
+    icon: mdi:timer-play-outline
+    description: >-
+      Засікти час на кухні: скільки хвилин і на що. Секунди переводити в хвилини (30 секунд = 0.5).
+      Приклади: засічи 10 хвилин; таймер на макарони 8 хвилин; постав таймер на пів години для курки;
+      засічи півтори хвилини на яйця
+    mode: queued
+    fields:
+      minutes:
+        name: Хвилини
+        description: Скільки хвилин (можна дробове)
+        required: true
+        selector:
+          number: {min: 0.1, max: 600, step: any, mode: box}
+      name:
+        name: На що
+        description: Назва таймера, наприклад «макарони»; не обов'язково
+        selector:
+          text: {}
+    sequence:
+      - variables:
+          free: >-
+            {{ ['timer.kukhnia_1', 'timer.kukhnia_2', 'timer.kukhnia_3']
+               | select('is_state', 'idle') | list | first | default('') }}
+          label: "{{ (name | default('') | trim) or 'таймер' }}"
+          total: "{{ (minutes | float(0) * 60) | round(0) | int }}"
+          spoken: >-
+            {% set m = total // 60 %}{% set s = total % 60 %}
+            {%- macro hv(n) -%}{{ n }} {{ 'хвилину' if n % 10 == 1 and n % 100 != 11
+               else 'хвилини' if n % 10 in [2,3,4] and n % 100 not in [12,13,14] else 'хвилин' }}{%- endmacro -%}
+            {%- if m and s -%}{{ hv(m) }} {{ s }} с{%- elif m -%}{{ hv(m) }}{%- else -%}{{ s }} секунд{%- endif -%}
+      - if: "{{ free == '' }}"
+        then:
+          - variables:
+              out: {speech: "Усі три таймери вже зайняті. Скасуй якийсь і спробуй ще раз."}
+          - stop: busy
+            response_variable: out
+      - if: "{{ total < 1 }}"
+        then:
+          - variables:
+              out: {speech: "Не зрозуміла, на скільки засікти."}
+          - stop: bad
+            response_variable: out
+      - action: input_text.set_value
+        target:
+          entity_id: "input_text.{{ free.split('.')[1] }}_nazva"
+        data:
+          value: "{{ label }}"
+      - action: input_text.set_value
+        target:
+          entity_id: "input_text.{{ free.split('.')[1] }}_khto"
+        data:
+          value: "{{ context.user_id or '' }}"
+      - action: timer.start
+        target:
+          entity_id: "{{ free }}"
+        data:
+          duration: "{{ '%02d:%02d:%02d' | format(total // 3600, (total % 3600) // 60, total % 60) }}"
+      - variables:
+          out:
+            speech: "Засікла {{ spoken }}{{ '' if label == 'таймер' else ' на ' ~ label }}."
+      - stop: started
+        response_variable: out
+
+  taimer_zalyshok:
+    alias: Скільки лишилось таймеру
+    icon: mdi:timer-sand
+    description: >-
+      Скільки часу лишилось на кухонному таймері. Приклади: скільки ще макаронам; скільки лишилось;
+      коли будуть яйця; що з таймером
+    mode: queued
+    fields:
+      name:
+        name: На що
+        description: Назва таймера, якщо назвали
+        selector:
+          text: {}
+    sequence:
+      - variables: &find
+          active: >-
+            {% set ns = namespace(out=[]) %}
+            {% for n in [1, 2, 3] %}{% set t = 'timer.kukhnia_' ~ n %}
+              {% if states(t) in ['active', 'paused'] %}
+                {% if states(t) == 'active' %}
+                  {% set left = (as_timestamp(state_attr(t, 'finishes_at')) - as_timestamp(now())) | int(0) %}
+                {% else %}
+                  {% set p = (state_attr(t, 'remaining') or '0:00:00').split(':') | map('int', 0) | list %}
+                  {% set left = p[0] * 3600 + p[1] * 60 + p[2] %}
+                {% endif %}
+                {% set ns.out = ns.out + [{'id': t, 'n': n, 'left': left,
+                  'name': states('input_text.kukhnia_' ~ n ~ '_nazva') or 'таймер'}] %}
+              {% endif %}{% endfor %}{{ ns.out }}
+          wanted: "{{ (name | default('') | trim | lower) }}"
+          matched: >-
+            {% set ns = namespace(out=[]) %}
+            {% for t in active %}{% set nm = t.name | lower %}
+              {% if wanted and (wanted in nm or nm in wanted or wanted[:4] == nm[:4]) %}{% set ns.out = ns.out + [t] %}{% endif %}
+            {% endfor %}{{ ns.out if wanted else active }}
+      - if: "{{ active | count == 0 }}"
+        then:
+          - variables:
+              out: {speech: "Зараз жоден таймер не йде."}
+          - stop: none
+            response_variable: out
+      - if: "{{ matched | count == 0 or (matched | count > 1 and not wanted) }}"
+        then:
+          - variables:
+              out:
+                speech: >-
+                  {% if matched | count == 0 %}Такого таймера немає. {% endif %}Йдуть: {{ active | map(attribute='name') | join(', ') }}. Який саме?
+                continue_conversation: true
+                context: Людина обирає кухонний таймер, щоб дізнатися, скільки лишилось.
+                options: "{{ active | map(attribute='name') | list }}"
+          - stop: which
+            response_variable: out
+      - variables:
+          out:
+            speech: >-
+              {% set lines = namespace(v=[]) %}
+              {% for t in matched %}{% set l = [t.left, 0] | max %}
+                {% set lines.v = lines.v + [t.name ~ ': ще ' ~ ((l // 60) ~ ' хв ' if l >= 60 else '') ~ (l % 60) ~ ' с'] %}
+              {% endfor %}{{ lines.v | join('; ') }}.
+      - stop: done
+        response_variable: out
+
+  taimer_skasuvaty:
+    alias: Скасувати таймер
+    icon: mdi:timer-cancel-outline
+    description: >-
+      Зупинити кухонний таймер. Приклади: скасуй таймер на макарони; вимкни таймер; скасуй усі таймери
+    mode: queued
+    fields:
+      name:
+        name: На що
+        description: Назва таймера, якщо назвали; «усі» — скасувати всі
+        selector:
+          text: {}
+    sequence:
+      - variables: *find
+      - variables:
+          all: "{{ wanted in ['усі', 'всі', 'все', 'усе'] }}"
+          targets: "{{ active if all or (not wanted and active | count == 1) else matched if wanted else [] }}"
+      - if: "{{ active | count == 0 }}"
+        then:
+          - variables:
+              out: {speech: "Таймерів і так немає."}
+          - stop: none
+            response_variable: out
+      - if: "{{ targets | count == 0 }}"
+        then:
+          - variables:
+              out:
+                speech: >-
+                  {% if wanted %}Такого таймера немає. {% endif %}Йдуть: {{ active | map(attribute='name') | join(', ') }}. Який скасувати?
+                continue_conversation: true
+                context: Людина обирає, який кухонний таймер скасувати (можна «усі»).
+                options: "{{ (active | map(attribute='name') | list) + ['усі'] }}"
+          - stop: which
+            response_variable: out
+      - action: timer.cancel
+        target:
+          entity_id: "{{ targets | map(attribute='id') | list }}"
+      - repeat:
+          for_each: "{{ targets | map(attribute='n') | list }}"
+          sequence:
+            - action: input_text.set_value
+              target:
+                entity_id:
+                  - "input_text.kukhnia_{{ repeat.item }}_nazva"
+                  - "input_text.kukhnia_{{ repeat.item }}_khto"
+              data:
+                value: ""
+      - variables:
+          out:
+            speech: "Скасувала: {{ targets | map(attribute='name') | join(', ') }}."
+      - stop: done
+        response_variable: out
+
+  nahadaty:
+    alias: Нагадати
+    icon: mdi:bell-ring-outline
+    description: >-
+      Нагадати через кілька хвилин. Приклади: нагадай через 20 хвилин перевернути м'ясо;
+      нагадай за пів години вимкнути духовку; через 5 хвилин нагадай помішати
+    mode: queued
+    fields:
+      minutes:
+        name: Через скільки хвилин
+        required: true
+        selector:
+          number: {min: 1, max: 1440, step: any, mode: box}
+      text:
+        name: Про що
+        required: true
+        selector:
+          text: {}
+    sequence:
+      # Чекання — в окремому скрипті, щоб відповідь прозвучала одразу.
+      - action: script.turn_on
+        target:
+          entity_id: script.nahaduvannia_vykonaty
+        data:
+          variables:
+            minutes: "{{ minutes | float(0) }}"
+            text: "{{ text }}"
+            khto: "{{ context.user_id or '' }}"
+      - variables:
+          out:
+            speech: "Добре, нагадаю через {{ minutes | float(0) | round(1) | string | replace('.0', '') }} хв: {{ text }}."
+      - stop: done
+        response_variable: out
+
+  nahaduvannia_vykonaty:
+    alias: Нагадування (службовий)
+    description: Чекає й нагадує. Викликається скриптом «Нагадати», мітка «Голос» не потрібна.
+    icon: mdi:bell-cog-outline
+    mode: parallel
+    max: 20
+    fields:
+      minutes: {selector: {number: {min: 0, max: 1440, step: any}}}
+      text: {selector: {text: {}}}
+      khto: {selector: {text: {}}}
+    sequence:
+      - delay:
+          seconds: "{{ (minutes | float(0) * 60) | int }}"
+      - variables:
+          person: >-
+            {{ states.person | selectattr('attributes.user_id', 'defined')
+               | selectattr('attributes.user_id', 'eq', khto) | map(attribute='entity_id') | first | default('') }}
+      - action: assist_satellite.announce
+        target:
+          entity_id: assist_satellite.dimaserver_headset_assist_satellite
+        data:
+          message: "Нагадую: {{ text }}"
+        continue_on_error: true
+      - action: notify.smart
+        data:
+          user: "{{ person if person else 'all' }}"
+          category: kukhnia
+          title: Нагадування
+          message: "{{ text }}"
+          priority: high
+        continue_on_error: true
+
+automation:
+  - id: kukhnia_taimer_zakinchyvsia
+    alias: Кухня — таймер закінчився
+    description: Оголосити на сателіті й надіслати тому, хто ставив (або всім).
+    mode: parallel
+    triggers:
+      - trigger: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.kukhnia_1
+      - trigger: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.kukhnia_2
+      - trigger: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.kukhnia_3
+    actions:
+      - variables:
+          n: "{{ trigger.event.data.entity_id.split('_')[-1] }}"
+          label: "{{ states('input_text.kukhnia_' ~ n ~ '_nazva') or 'таймер' }}"
+          khto: "{{ states('input_text.kukhnia_' ~ n ~ '_khto') }}"
+          person: >-
+            {{ states.person | selectattr('attributes.user_id', 'defined')
+               | selectattr('attributes.user_id', 'eq', khto) | map(attribute='entity_id') | first | default('') }}
+          message: "{{ 'Час вийшов' if label == 'таймер' else label | capitalize ~ ': час вийшов' }}"
+      - action: assist_satellite.announce
+        target:
+          entity_id: assist_satellite.dimaserver_headset_assist_satellite
+        data:
+          message: "{{ message }}"
+        continue_on_error: true
+      - action: notify.smart
+        data:
+          user: "{{ person if person else 'all' }}"
+          category: kukhnia
+          title: ⏰ Таймер
+          message: "{{ message }}"
+          priority: high
+          tag: "kukhnia_taimer_{{ n }}"
+        continue_on_error: true
+      - action: input_text.set_value
+        target:
+          entity_id:
+            - "input_text.kukhnia_{{ n }}_nazva"
+            - "input_text.kukhnia_{{ n }}_khto"
+        data:
+          value: ""
