@@ -17,6 +17,7 @@ from .const import (
     CONF_ASSISTANT_NAME,
     CONF_DEVICES,
     CONF_FALLBACK_AGENT,
+    CONF_FOLLOW_UP,
     CONF_LABEL,
     CONF_LOUD_DB,
     CONF_MIN_CONFIDENCE,
@@ -31,6 +32,7 @@ from .const import (
     CONF_VOLUME_MIN,
     DEFAULT_ASSISTANT_NAME,
     DEFAULT_FALLBACK_AGENT,
+    DEFAULT_FOLLOW_UP,
     DEFAULT_LABEL,
     DEFAULT_LOUD_DB,
     DEFAULT_MIN_CONFIDENCE,
@@ -61,6 +63,7 @@ def _options_schema(values: dict[str, Any]) -> vol.Schema:
         vol.Required(CONF_FALLBACK_AGENT,
                      default=values.get(CONF_FALLBACK_AGENT, DEFAULT_FALLBACK_AGENT)): str,
         vol.Required(CONF_DEVICES, default=values.get(CONF_DEVICES, True)): bool,
+        vol.Required(CONF_FOLLOW_UP, default=values.get(CONF_FOLLOW_UP, DEFAULT_FOLLOW_UP)): bool,
         vol.Required(CONF_VOLUME_ADAPT,
                      default=values.get(CONF_VOLUME_ADAPT, DEFAULT_VOLUME_ADAPT)): bool,
         vol.Required(CONF_VOLUME_MIN, default=values.get(CONF_VOLUME_MIN, DEFAULT_VOLUME_MIN)):

@@ -54,9 +54,10 @@ async def satellite(hass: HomeAssistant, aioclient_mock):
     async def record(call: ServiceCall):
         volumes.append(call)
 
+    assert await async_setup_component(hass, "homeassistant", {})
+    assert await async_setup_component(hass, "media_player", {})
     hass.services.async_register("media_player", "volume_set", record)
     hass.services.async_register("test", "record", lambda call: None)
-    assert await async_setup_component(hass, "homeassistant", {})
     assert await async_setup_component(hass, "conversation", {})
     assert await async_setup_component(hass, "script", {"script": {"svitlo": {
         "alias": "Світло", "sequence": [{"action": "test.record"}]}}})
@@ -108,3 +109,42 @@ async def test_no_volume_without_satellite_or_fresh_level(hass, satellite):
     await conversation.async_converse(hass, "увімкни світло", None, Context(), "uk",
                                       agent_id=agent_id)  # typed in the UI: no device
     assert not volumes
+
+
+async def test_listens_on_after_a_command_and_stops_quietly(hass, satellite, aioclient_mock):
+    volumes, agent_id, device = satellite
+
+    async def say(text, conv_id=None):
+        return await conversation.async_converse(hass, text, conv_id, Context(), "uk",
+                                                 agent_id=agent_id, device_id=device.id)
+
+    first = await say("увімкни світло")
+    assert first.continue_conversation  # listens on without the wake word
+    conv = first.conversation_id
+
+    thanks = await say("Дякую!", conv)
+    assert thanks.response.speech["plain"]["speech"] == "Будь ласка."
+    assert not thanks.continue_conversation
+
+    again = await say("увімкни світло", conv)
+    assert again.continue_conversation
+    from custom_components.voice_assistant_ha.const import FOLLOW_UP_SILENCE
+    silence = await say(FOLLOW_UP_SILENCE, conv)
+    assert silence.response.speech.get("plain", {}).get("speech", "") == ""
+    assert not silence.continue_conversation
+
+    await say("увімкни світло", conv)
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(f"{URL}/v1/match", json={"matches": []})
+    chatter = await say("а що там по телевізору", conv)  # someone talking nearby
+    assert chatter.response.speech.get("plain", {}).get("speech", "") == ""
+    assert not chatter.continue_conversation
+    # the follow-up phrase was sent with the previous command as context
+    assert "увімкни світло" in aioclient_mock.mock_calls[-1][2]["context"]
+
+
+async def test_no_listening_on_for_typed_text(hass, satellite):
+    _, agent_id, _ = satellite
+    result = await conversation.async_converse(hass, "увімкни світло", None, Context(), "uk",
+                                               agent_id=agent_id)
+    assert not result.continue_conversation

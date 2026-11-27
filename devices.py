@@ -13,6 +13,7 @@ from typing import Any
 
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 from homeassistant.const import ATTR_FRIENDLY_NAME, ATTR_UNIT_OF_MEASUREMENT
+from homeassistant.util import dt as dt_util
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
@@ -34,6 +35,8 @@ KINDS = {  # spoken kind -> domains
     "штори й ворота": ["cover"],
     "вентилятори": ["fan"],
     "медіа": ["media_player"],
+    "пилосос": ["vacuum"],
+    "зволожувачі": ["humidifier"],
     "усе": ["light", "switch", "input_boolean", "climate", "cover", "fan", "media_player"],
 }
 ACTIVATABLE = ("scene", "script")
@@ -171,6 +174,8 @@ def on_off_call(entity_id: str, action: str) -> tuple[str, str]:
         return domain, "press"
     if domain in ACTIVATABLE:
         return domain, "turn_on"
+    if domain == "vacuum":
+        return "vacuum", {"on": "start", "off": "return_to_base", "toggle": "start_pause"}[action]
     return "homeassistant", {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}[action]
 
 
@@ -188,19 +193,72 @@ def level_call(entity_id: str, value: float) -> tuple[str, str, dict[str, Any]] 
         return "fan", "set_percentage", {"percentage": int(max(0, min(100, value)))}
     if domain in ("number", "input_number"):
         return domain, "set_value", {"value": value}
+    if domain == "humidifier":
+        return "humidifier", "set_humidity", {"humidity": int(max(0, min(100, value)))}
     return None
 
 
 _STATES = {"on": "увімкнено", "off": "вимкнено", "open": "відкрито", "closed": "закрито",
            "locked": "замкнено", "unlocked": "відімкнено", "unavailable": "недоступний",
+           "unknown": "невідомо",
            "heat": "обігрів", "cool": "охолодження", "auto": "авто", "dry": "осушення",
            "fan_only": "вентиляція", "heat_cool": "авто", "playing": "грає", "paused": "пауза",
-           "idle": "очікує", "home": "вдома", "not_home": "не вдома"}
+           "idle": "очікує", "home": "вдома", "not_home": "не вдома",
+           "docked": "на базі", "cleaning": "прибирає", "returning": "повертається на базу",
+           "error": "помилка"}
+
+_WEATHER = {"clear-night": "ясно", "cloudy": "хмарно", "exceptional": "незвичайна погода",
+            "fog": "туман", "hail": "град", "lightning": "гроза", "lightning-rainy": "гроза з дощем",
+            "partlycloudy": "мінлива хмарність", "pouring": "злива", "rainy": "дощ", "snowy": "сніг",
+            "snowy-rainy": "мокрий сніг", "sunny": "сонячно", "windy": "вітряно",
+            "windy-variant": "вітряно з хмарами"}
+
+# binary_sensor: what «on» / «off» means for a device class
+_BINARY = {"power": ("є", "немає"), "plug": ("підключено", "відключено"),
+           "problem": ("є проблема", "все гаразд"), "safety": ("небезпека", "безпечно"),
+           "moisture": ("волого", "сухо"), "motion": ("є рух", "руху немає"),
+           "occupancy": ("хтось є", "нікого"), "presence": ("вдома", "немає"),
+           "door": ("відчинені", "зачинені"), "window": ("відчинене", "зачинене"),
+           "opening": ("відчинено", "зачинено"), "battery": ("низький заряд", "заряд у нормі"),
+           "battery_charging": ("заряджається", "не заряджається"),
+           "connectivity": ("на зв'язку", "не на зв'язку"), "running": ("працює", "не працює")}
+
+_MONTHS = ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня",
+           "вересня", "жовтня", "листопада", "грудня"]
+
+
+def spoken_time(value: str) -> str | None:
+    """ISO timestamp -> «сьогодні о 9:30» / «завтра о 15:00» / «3 грудня о 8:00»."""
+    when = dt_util.parse_datetime(value) if isinstance(value, str) else None
+    if when is None:
+        return None
+    when = dt_util.as_local(when)
+    days = (when.date() - dt_util.now().date()).days
+    day = {0: "сьогодні", 1: "завтра", -1: "вчора"}.get(days, f"{when.day} {_MONTHS[when.month - 1]}")
+    return f"{day} о {when.hour}:{when.minute:02d}"
 
 
 def describe_state(name: str, state: State | None) -> str:
     if state is None:
         return f"{name}: невідомо."
+    if state.domain == "weather":
+        a = state.attributes
+        parts = [_WEATHER.get(state.state, state.state)]
+        if a.get("temperature") is not None:
+            parts.append(f"{a['temperature']:g}°" if isinstance(a["temperature"], (int, float))
+                         else f"{a['temperature']}°")
+        if a.get("humidity") is not None:
+            parts.append(f"вологість {a['humidity']}%")
+        if a.get("wind_speed") is not None:
+            parts.append(f"вітер {a['wind_speed']} {a.get('wind_speed_unit', '')}".strip())
+        return f"Погода: {', '.join(parts)}."
+    if state.domain == "binary_sensor" and state.state in ("on", "off"):
+        yes, no = _BINARY.get(state.attributes.get("device_class") or "", ("так", "ні"))
+        return f"{name}: {yes if state.state == 'on' else no}."
+    if state.attributes.get("device_class") == "timestamp" or state.domain in ("input_datetime",):
+        spoken = spoken_time(state.state)
+        if spoken:
+            return f"{name}: {spoken}."
     value = _STATES.get(state.state, state.state)
     unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
     text = f"{name}: {value}{' ' + unit if unit else ''}"
@@ -211,6 +269,11 @@ def describe_state(name: str, state: State | None) -> str:
             text += f", задано {target}°"
         if cur is not None:
             text += f", зараз {cur}°"
+    elif state.domain == "humidifier":
+        if state.attributes.get("humidity") is not None:
+            text += f", задано {state.attributes['humidity']}%"
+        if state.attributes.get("current_humidity") is not None:
+            text += f", зараз {state.attributes['current_humidity']}%"
     elif state.domain == "light" and state.state == "on" and state.attributes.get("brightness"):
         text += f", яскравість {round(state.attributes['brightness'] / 2.55)}%"
     return text + "."

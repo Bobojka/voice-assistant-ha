@@ -38,6 +38,7 @@ from .const import (
     CONF_ASSISTANT_NAME,
     CONF_DEVICES,
     CONF_FALLBACK_AGENT,
+    CONF_FOLLOW_UP,
     CONF_LABEL,
     CONF_LOUD_DB,
     CONF_MIN_CONFIDENCE,
@@ -47,6 +48,7 @@ from .const import (
     CONF_VOLUME_MIN,
     DEFAULT_ASSISTANT_NAME,
     DEFAULT_FALLBACK_AGENT,
+    DEFAULT_FOLLOW_UP,
     DEFAULT_LABEL,
     DEFAULT_LOUD_DB,
     DEFAULT_MIN_CONFIDENCE,
@@ -55,6 +57,8 @@ from .const import (
     DEFAULT_VOLUME_MAX,
     DEFAULT_VOLUME_MIN,
     DOMAIN,
+    FOLLOW_UP_SILENCE,
+    FOLLOW_UP_WINDOW_S,
     NO_FALLBACK,
     PENDING_TTL_S,
 )
@@ -73,6 +77,15 @@ class Pending:
     context: str = ""
     expires: float = 0.0
     options: list[str] = field(default_factory=list)  # answers a script offers
+    follow: bool = False  # not a question: listening on after a done command
+
+
+THANKS = {"дякую", "спасибі", "дякс", "дякую тобі", "дуже дякую"}
+STOP = THANKS | {"все", "усе", "стоп", "ні", "нічого", "досить", "не треба", "відбій", "забудь"}
+
+
+def _norm(text: str) -> str:
+    return " ".join("".join(c for c in text.lower() if c.isalnum() or c.isspace()).split())
 
 
 async def async_setup_entry(
@@ -95,6 +108,7 @@ class VoiceAgent(conversation.ConversationEntity):
         self._pending: dict[str, Pending] = {}
         self._targets: list[dev.Target] = []
         self._intents: list[dict[str, Any]] = []
+        self._turn_ok = False  # this turn ran a command to the end
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -124,9 +138,13 @@ class VoiceAgent(conversation.ConversationEntity):
                        if e.domain == "script" and e.unique_id}
             labelled = set(scripts.values())
             if scripts:
-                descriptions = (await service_helper.async_get_all_descriptions(self.hass)).get("script", {})
-                intents, commands = build_catalog(
-                    {k: descriptions[k] for k in scripts if k in descriptions})
+                # Scripts register their own descriptions: no need to load every integration's.
+                descriptions = {k: d for k in scripts if (
+                    d := service_helper.async_get_cached_service_description(self.hass, "script", k))}
+                if len(descriptions) < len(scripts):
+                    every = (await service_helper.async_get_all_descriptions(self.hass)).get("script", {})
+                    descriptions = {k: every[k] for k in scripts if k in every}
+                intents, commands = build_catalog(descriptions)
 
         self._targets = []
         if self._opt(CONF_DEVICES, True):
@@ -148,6 +166,18 @@ class VoiceAgent(conversation.ConversationEntity):
     ) -> conversation.ConversationResult:
         result = await self.process(user_input)
         await self._adapt_volume(user_input)
+        from_satellite = bool(user_input.device_id or user_input.satellite_id)
+        if (from_satellite and self._turn_ok and not result.continue_conversation
+                and self._opt(CONF_FOLLOW_UP, DEFAULT_FOLLOW_UP) and result.conversation_id):
+            # Done: keep listening a few seconds without the wake word for «і ще ...».
+            self._ask(result.conversation_id, Pending(
+                "context", "", follow=True,
+                context=(f"Попередня команда людини: «{user_input.text.strip()}». Нова фраза "
+                         "може її доповнювати («і ще ...», «а тепер на 22»).")))
+            result.continue_conversation = True
+        if from_satellite and result.continue_conversation:
+            self.hass.data.setdefault(DOMAIN, {})["follow_up_until"] = (
+                time.monotonic() + FOLLOW_UP_WINDOW_S)
         return result
 
     async def _adapt_volume(self, user_input: conversation.ConversationInput) -> None:
@@ -195,6 +225,20 @@ class VoiceAgent(conversation.ConversationEntity):
         now = time.monotonic()
         self._pending = {k: p for k, p in self._pending.items() if p.expires > now}
         pending = self._pending.pop(conv_id, None)
+        self._turn_ok = False
+        follow = bool(pending and pending.follow)
+        quiet = silent or follow  # nothing recognised -> just stop listening
+
+        reply = _Reply(user_input.language)
+        if not text or text == FOLLOW_UP_SILENCE:
+            reply.error("")  # silence: end without a word
+            return reply.result(conv_id)
+        if follow and _norm(text) in STOP:
+            if _norm(text) in THANKS:
+                reply.say("Будь ласка.")
+            else:
+                reply.error("")
+            return reply.result(conv_id)
 
         try:
             intents, commands = await self._catalog()
@@ -202,8 +246,6 @@ class VoiceAgent(conversation.ConversationEntity):
             _LOGGER.exception("building the catalog failed")
             intents, commands = [], {}
         self._intents = intents
-
-        reply = _Reply(user_input.language)
 
         # 1. A yes / no to our own confirmation question.
         if pending and pending.kind == "confirm":
@@ -251,12 +293,12 @@ class VoiceAgent(conversation.ConversationEntity):
                 matches = await self._client.match(text, intents, context, conv_id)
             except ServiceError as err:
                 _LOGGER.warning("voice service unavailable, using the fallback agent: %s", err)
-                return await self._fallback(user_input, conv_id, reply, silent)
+                return await self._fallback(user_input, conv_id, reply, quiet)
         _LOGGER.debug("catalog: %d commands, %d devices; matches: %s",
                       len(intents), len(self._targets), matches)
         matches = [m for m in matches if m.get("intent") in commands]
         if not matches:
-            return await self._fallback(user_input, conv_id, reply, silent)
+            return await self._fallback(user_input, conv_id, reply, quiet)
 
         await self._run_queue(user_input, conv_id, matches, commands, reply)
         return reply.result(conv_id)
@@ -314,6 +356,7 @@ class VoiceAgent(conversation.ConversationEntity):
                                            options=options[:10]))
                 reply.keep_listening()
                 return
+        self._turn_ok = True
 
     async def _call_script(
         self, user_input: conversation.ConversationInput, command: Command,

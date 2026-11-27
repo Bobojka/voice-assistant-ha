@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 import wave
 from collections.abc import AsyncIterable
 
@@ -19,7 +20,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import ulid
 
 from .client import ServiceError, VoiceServiceClient
-from .const import CONF_DEVICES, CONF_LABEL, DEFAULT_LABEL
+from .const import CONF_DEVICES, CONF_LABEL, DEFAULT_LABEL, DOMAIN, FOLLOW_UP_SILENCE
 from .loudness import remember
 from .vocabulary import build_vocabulary
 
@@ -98,4 +99,8 @@ class VoiceSTT(stt.SpeechToTextEntity):
             _LOGGER.warning("STT failed (%s): %s", request_id, err)
             return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
         _LOGGER.debug("STT %s: %r (hints: %s)", request_id, text, ", ".join(vocabulary))
+        if not text and self.hass.data.get(DOMAIN, {}).get("follow_up_until", 0) > time.monotonic():
+            # The agent is listening on: silence ends the talk quietly, not with an error beep.
+            self.hass.data[DOMAIN]["follow_up_until"] = 0
+            return stt.SpeechResult(FOLLOW_UP_SILENCE, stt.SpeechResultState.SUCCESS)
         return stt.SpeechResult(text, stt.SpeechResultState.SUCCESS)
