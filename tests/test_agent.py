@@ -146,7 +146,7 @@ async def devices(hass, setup):
     await hass.async_block_till_done()
     kitchen = ar.async_get(hass).async_create("Кухня")
     reg = er.async_get(hass)
-    reg.async_update_entity("input_boolean.lampa", area_id=kitchen.id)
+    reg.async_update_entity("input_boolean.lampa", area_id=kitchen.id, aliases={"Торшер"})
     for eid in ("input_boolean.kondytsioner", "input_boolean.lampa"):
         async_expose_entity(hass, "conversation", eid, True)
     async_expose_entity(hass, "conversation", "input_boolean.hidden", False)
@@ -161,6 +161,8 @@ async def test_catalog_has_universal_device_commands(hass, devices, aioclient_mo
     assert {"spysaty", "ha.turn_on_off", "ha.set_level", "ha.state"} <= set(intents)
     device_values = next(s for s in intents["ha.turn_on_off"]["slots"] if s["name"] == "device")["values"]
     assert "Кондиціонер" in device_values and "Лампа (Кухня)" in device_values
+    assert "Торшер (Кухня)" in device_values
+    assert all(isinstance(v, str) for v in device_values)
     assert not any("Прихований" in v for v in device_values)
     assert not any("Списати" in v for v in device_values)  # labelled script is not a device
 

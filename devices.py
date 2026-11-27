@@ -65,11 +65,13 @@ def exposed_targets(hass: HomeAssistant, skip: set[str]) -> list[Target]:
         if eid in skip or not async_should_expose(hass, "conversation", eid):
             continue
         entry = reg.async_get(eid)
-        name = state.attributes.get(ATTR_FRIENDLY_NAME) or eid
-        targets.append(Target(eid, str(name), _area_of(hass, entry)))
+        name = str(state.attributes.get(ATTR_FRIENDLY_NAME) or eid).strip()
+        area = _area_of(hass, entry)
+        targets.append(Target(eid, name, area))
+        # Newer HA keeps a placeholder (not a string) for "the entity's own name" among aliases.
         for alias in (entry.aliases if entry else ()) or ():
-            if alias and alias != name:
-                targets.append(Target(eid, alias, _area_of(hass, entry)))
+            if isinstance(alias, str) and alias.strip() and alias.strip() != name:
+                targets.append(Target(eid, alias.strip(), area))
     return targets
 
 
@@ -80,8 +82,8 @@ def _names(targets: list[Target], domains: tuple[str, ...] | None = None,
         d = t.entity_id.split(".")[0]
         if (domains and d not in domains) or d in exclude:
             continue
-        label = f"{t.name} ({t.area})" if t.area else t.name
-        if label not in out:
+        label = f"{t.name} ({t.area})" if t.area else str(t.name)
+        if label and label not in out:
             out.append(label)
     return out[:1000]
 
@@ -132,7 +134,7 @@ def build_device_intents(targets: list[Target], areas: list[str]) -> list[dict[s
 
 def _match_label(targets: list[Target], label: str) -> list[Target]:
     return [t for t in targets
-            if (f"{t.name} ({t.area})" if t.area else t.name) == label]
+            if (f"{t.name} ({t.area})" if t.area else str(t.name)) == label]
 
 
 def resolve(targets: list[Target], slots: dict[str, Any],
