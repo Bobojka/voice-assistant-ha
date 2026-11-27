@@ -190,6 +190,8 @@ class VoiceAgent(conversation.ConversationEntity):
             except ServiceError as err:
                 _LOGGER.warning("voice service unavailable, using the fallback agent: %s", err)
                 return await self._fallback(user_input, conv_id, reply)
+        _LOGGER.debug("catalog: %d commands, %d devices; matches: %s",
+                      len(intents), len(self._targets), matches)
         matches = [m for m in matches if m.get("intent") in commands]
         if not matches:
             return await self._fallback(user_input, conv_id, reply)
@@ -222,7 +224,9 @@ class VoiceAgent(conversation.ConversationEntity):
                 reply.ask(question)
                 return
 
-            if not confirmed and float(match.get("confidence", 1.0)) < min_conf:
+            # Asking the state changes nothing: no need to confirm it.
+            if (not confirmed and command.script != dev.STATE
+                    and float(match.get("confidence", 1.0)) < min_conf):
                 details = describe_slots(command, slots)
                 question = f"Виконати «{command.title}»{': ' + details if details else ''}?"
                 self._ask(conv_id, Pending("confirm", question, queue[i:]))
