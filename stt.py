@@ -20,6 +20,7 @@ from homeassistant.util import ulid
 
 from .client import ServiceError, VoiceServiceClient
 from .const import CONF_DEVICES, CONF_LABEL, DEFAULT_LABEL
+from .loudness import remember
 from .vocabulary import build_vocabulary
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,6 +84,8 @@ class VoiceSTT(stt.SpeechToTextEntity):
             if len(pcm) < limit:
                 pcm.extend(chunk[: limit - len(pcm)])
 
+        level = remember(self.hass, bytes(pcm))
+        _LOGGER.debug("level: voice %s dBFS, noise %s dBFS", level.speech_db, level.noise_db)
         opts = self.entry.options
         vocabulary = build_vocabulary(
             self.hass, opts.get(CONF_LABEL, DEFAULT_LABEL), opts.get(CONF_DEVICES, True))

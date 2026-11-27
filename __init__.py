@@ -16,7 +16,7 @@ from .telegram import TelegramBridge, UsersError, parse_users
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.CONVERSATION, Platform.STT]
+PLATFORMS = [Platform.CONVERSATION, Platform.SENSOR, Platform.STT]
 
 type VoiceConfigEntry = ConfigEntry[VoiceServiceClient]
 

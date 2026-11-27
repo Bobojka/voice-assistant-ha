@@ -22,6 +22,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import intent
 from homeassistant.helpers import label_registry as lr
@@ -30,6 +31,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import ulid
 
 from . import devices as dev
+from . import loudness
 from .catalog import Command, build_catalog, describe_slots, yes_no
 from .client import ServiceError, VoiceServiceClient
 from .const import (
@@ -37,11 +39,21 @@ from .const import (
     CONF_DEVICES,
     CONF_FALLBACK_AGENT,
     CONF_LABEL,
+    CONF_LOUD_DB,
     CONF_MIN_CONFIDENCE,
+    CONF_QUIET_DB,
+    CONF_VOLUME_ADAPT,
+    CONF_VOLUME_MAX,
+    CONF_VOLUME_MIN,
     DEFAULT_ASSISTANT_NAME,
     DEFAULT_FALLBACK_AGENT,
     DEFAULT_LABEL,
+    DEFAULT_LOUD_DB,
     DEFAULT_MIN_CONFIDENCE,
+    DEFAULT_QUIET_DB,
+    DEFAULT_VOLUME_ADAPT,
+    DEFAULT_VOLUME_MAX,
+    DEFAULT_VOLUME_MIN,
     DOMAIN,
     NO_FALLBACK,
     PENDING_TTL_S,
@@ -60,6 +72,7 @@ class Pending:
     slot: str | None = None
     context: str = ""
     expires: float = 0.0
+    options: list[str] = field(default_factory=list)  # answers a script offers
 
 
 async def async_setup_entry(
@@ -81,6 +94,7 @@ class VoiceAgent(conversation.ConversationEntity):
         self._attr_unique_id = entry.entry_id
         self._pending: dict[str, Pending] = {}
         self._targets: list[dev.Target] = []
+        self._intents: list[dict[str, Any]] = []
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -132,7 +146,44 @@ class VoiceAgent(conversation.ConversationEntity):
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
-        return await self.process(user_input)
+        result = await self.process(user_input)
+        await self._adapt_volume(user_input)
+        return result
+
+    async def _adapt_volume(self, user_input: conversation.ConversationInput) -> None:
+        """Answer as loud as the request was: volume of the satellite's media player."""
+        if not self._opt(CONF_VOLUME_ADAPT, DEFAULT_VOLUME_ADAPT):
+            return
+        level = loudness.recent(self.hass)
+        if level is None:
+            return
+        reg = er.async_get(self.hass)
+        device_id = user_input.device_id
+        if not device_id and user_input.satellite_id:
+            sat = reg.async_get(user_input.satellite_id)
+            device_id = sat.device_id if sat else None
+        if not device_id or dr.async_get(self.hass).async_get(device_id) is None:
+            return
+        players = [e.entity_id for e in er.async_entries_for_device(reg, device_id)
+                   if e.domain == "media_player" and not e.disabled_by]
+        if not players:
+            return
+        volume = loudness.volume_for(
+            level,
+            float(self._opt(CONF_QUIET_DB, DEFAULT_QUIET_DB)),
+            float(self._opt(CONF_LOUD_DB, DEFAULT_LOUD_DB)),
+            float(self._opt(CONF_VOLUME_MIN, DEFAULT_VOLUME_MIN)),
+            float(self._opt(CONF_VOLUME_MAX, DEFAULT_VOLUME_MAX)),
+        )
+        _LOGGER.debug("volume %s for voice %s / noise %s dBFS -> %s",
+                      volume, level.speech_db, level.noise_db, players)
+        try:
+            await self.hass.services.async_call(
+                "media_player", "volume_set",
+                {"entity_id": players, "volume_level": volume}, blocking=True,
+                context=user_input.context)
+        except HomeAssistantError as err:
+            _LOGGER.warning("volume_set failed: %s", err)
 
     async def process(
         self, user_input: conversation.ConversationInput, silent: bool = False
@@ -150,6 +201,7 @@ class VoiceAgent(conversation.ConversationEntity):
         except Exception:  # noqa: BLE001 - never break the pipeline on our side
             _LOGGER.exception("building the catalog failed")
             intents, commands = [], {}
+        self._intents = intents
 
         reply = _Reply(user_input.language)
 
@@ -257,7 +309,9 @@ class VoiceAgent(conversation.ConversationEntity):
             speech = str(response.get("speech") or "").strip()
             reply.say(speech or f"Готово: {command.title}.")
             if response.get("continue_conversation"):
-                self._ask(conv_id, Pending("context", speech, context=str(response.get("context") or "")))
+                options = [str(o) for o in (response.get("options") or []) if str(o).strip()]
+                self._ask(conv_id, Pending("context", speech, context=str(response.get("context") or ""),
+                                           options=options[:10]))
                 reply.keep_listening()
                 return
 
@@ -324,6 +378,40 @@ class VoiceAgent(conversation.ConversationEntity):
                 slots.get("action", "on"), "Готово")
             reply.say(f"{verb}: {what}.")
         return None
+
+    def choices(self, conv_id: str) -> list[str]:
+        """Possible answers to the question asked in this conversation, for buttons."""
+        pending = self._pending.get(conv_id)
+        if pending is None or pending.expires < time.monotonic():
+            return []
+        if pending.kind == "confirm":
+            return ["Так", "Ні"]
+        if pending.kind == "context":
+            return list(pending.options)
+        if pending.kind != "slot" or not pending.matches:
+            return []
+        current = pending.matches[0]
+        if pending.slot == "device" and current["intent"].startswith(dev.PREFIX):
+            slots = current.get("slots") or {}
+            kind_domains = dev.KINDS.get(slots.get("kind") or "")
+            labels: list[str] = []
+            for t in self._targets:
+                domain = t.entity_id.split(".")[0]
+                if domain in dev.ACTIVATABLE or (kind_domains and domain not in kind_domains):
+                    continue
+                if slots.get("area") and t.area != slots["area"]:
+                    continue
+                label = f"{t.name} ({t.area})" if t.area else t.name
+                if label not in labels:
+                    labels.append(label)
+            return labels if 0 < len(labels) <= 10 else []
+        spec = next((i for i in self._intents if i["name"] == current["intent"]), None)
+        slot = next((sl for sl in (spec or {}).get("slots", []) if sl["name"] == pending.slot), None)
+        if slot and slot.get("type") == "enum" and 0 < len(slot.get("values", [])) <= 10:
+            return list(slot["values"])
+        if slot and slot.get("type") == "boolean":
+            return ["Так", "Ні"]
+        return []
 
     def _ask(self, conv_id: str, pending: Pending) -> None:
         pending.expires = time.monotonic() + PENDING_TTL_S

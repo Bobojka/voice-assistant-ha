@@ -18,20 +18,35 @@ from .const import (
     CONF_DEVICES,
     CONF_FALLBACK_AGENT,
     CONF_LABEL,
+    CONF_LOUD_DB,
     CONF_MIN_CONFIDENCE,
+    CONF_QUIET_DB,
     CONF_TG_TOKEN,
     CONF_TG_URL,
     CONF_TG_USERS,
     CONF_TOKEN,
     CONF_URL,
+    CONF_VOLUME_ADAPT,
+    CONF_VOLUME_MAX,
+    CONF_VOLUME_MIN,
     DEFAULT_ASSISTANT_NAME,
     DEFAULT_FALLBACK_AGENT,
     DEFAULT_LABEL,
+    DEFAULT_LOUD_DB,
     DEFAULT_MIN_CONFIDENCE,
+    DEFAULT_QUIET_DB,
     DEFAULT_URL,
+    DEFAULT_VOLUME_ADAPT,
+    DEFAULT_VOLUME_MAX,
+    DEFAULT_VOLUME_MIN,
     DOMAIN,
     NO_FALLBACK,
 )
+
+
+def _slider(lo: float, hi: float, step: float) -> selector.NumberSelector:
+    return selector.NumberSelector(selector.NumberSelectorConfig(
+        min=lo, max=hi, step=step, mode=selector.NumberSelectorMode.SLIDER))
 
 
 def _options_schema(values: dict[str, Any]) -> vol.Schema:
@@ -46,6 +61,16 @@ def _options_schema(values: dict[str, Any]) -> vol.Schema:
         vol.Required(CONF_FALLBACK_AGENT,
                      default=values.get(CONF_FALLBACK_AGENT, DEFAULT_FALLBACK_AGENT)): str,
         vol.Required(CONF_DEVICES, default=values.get(CONF_DEVICES, True)): bool,
+        vol.Required(CONF_VOLUME_ADAPT,
+                     default=values.get(CONF_VOLUME_ADAPT, DEFAULT_VOLUME_ADAPT)): bool,
+        vol.Required(CONF_VOLUME_MIN, default=values.get(CONF_VOLUME_MIN, DEFAULT_VOLUME_MIN)):
+            _slider(0, 1, 0.05),
+        vol.Required(CONF_VOLUME_MAX, default=values.get(CONF_VOLUME_MAX, DEFAULT_VOLUME_MAX)):
+            _slider(0, 1, 0.05),
+        vol.Required(CONF_QUIET_DB, default=values.get(CONF_QUIET_DB, DEFAULT_QUIET_DB)):
+            _slider(-80, 0, 1),
+        vol.Required(CONF_LOUD_DB, default=values.get(CONF_LOUD_DB, DEFAULT_LOUD_DB)):
+            _slider(-80, 0, 1),
         vol.Optional(CONF_TG_URL, default=values.get(CONF_TG_URL, "")): str,
         vol.Optional(CONF_TG_TOKEN, default=values.get(CONF_TG_TOKEN, "")): selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)),

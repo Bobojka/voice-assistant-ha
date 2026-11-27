@@ -123,3 +123,48 @@ async def test_voice_is_transcribed_with_hints(hass, bridge, aioclient_mock):
     assert calls
     [reply] = sent(aioclient_mock, "sendMessage")
     assert reply["text"] == "🎙 увімкни світло\n\nУвімкнула світло."
+
+
+def tg_ok(aioclient_mock, *methods, result=True):
+    for m in methods:
+        aioclient_mock.post(f"{TG}/bot{TOKEN}/{m}", json={"ok": True, "result": result})
+
+
+def button(sender: int, data: str, message_id: int = 55):
+    return {"update_id": 2, "callback_query": {
+        "id": "cb1", "from": {"id": sender}, "data": data,
+        "message": {"message_id": message_id, "chat": {"id": 983470091}}}}
+
+
+async def test_confirmation_comes_with_buttons_and_a_press_answers_it(hass, bridge, aioclient_mock):
+    b, calls, _ = bridge
+    aioclient_mock.post(f"{URL}/v1/match", json={"matches": [
+        {"intent": "svitlo", "slots": {}, "confidence": 0.3, "warnings": []}]})
+    tg_ok(aioclient_mock, "sendChatAction", "answerCallbackQuery", "editMessageReplyMarkup")
+    aioclient_mock.post(f"{TG}/bot{TOKEN}/sendMessage", json={"ok": True, "result": {"message_id": 55}})
+    await b.handle(message(983470091, text="світло в коридорі"))
+    assert not calls  # low confidence: asks first
+    [question] = sent(aioclient_mock, "sendMessage")
+    rows = question["reply_markup"]["inline_keyboard"]
+    assert [[btn["text"] for btn in row] for row in rows] == [["Так", "Ні"]]
+    assert rows[0][0]["callback_data"] == "va:0"
+
+    await b.handle(button(983470091, "va:0"))
+    assert calls  # «Так» ran the script
+    edits = sent(aioclient_mock, "editMessageReplyMarkup")
+    assert edits[0]["reply_markup"]["inline_keyboard"][0][0]["text"] == "✔ Так"
+    assert sent(aioclient_mock, "sendMessage")[-1]["text"] == "Увімкнула світло."
+    assert not b.questions
+
+
+async def test_buttons_of_others_and_strangers(hass, bridge, aioclient_mock):
+    b, calls, _ = bridge
+    tg_ok(aioclient_mock, "answerCallbackQuery")
+    await b.handle(button(983470091, "komora:1"))  # another service's button
+    assert not aioclient_mock.mock_calls
+    b.questions[(983470091, 55)] = __import__(
+        "custom_components.voice_assistant_ha.telegram", fromlist=["OpenQuestion"]).OpenQuestion(983470091, ["Так", "Ні"])
+    await b.handle(button(42, "va:0"))  # someone else presses
+    [answer] = sent(aioclient_mock, "answerCallbackQuery")
+    assert answer["text"] == "Це питання не вам."
+    assert (983470091, 55) in b.questions and not calls
