@@ -22,6 +22,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import intent
@@ -34,11 +35,13 @@ from . import devices as dev
 from . import loudness
 from .catalog import Command, build_catalog, describe_slots, yes_no
 from .client import ServiceError, VoiceServiceClient
+from .habits import Habits, HomeAreasError, parse_home_areas
 from .const import (
     CONF_ASSISTANT_NAME,
     CONF_DEVICES,
     CONF_FALLBACK_AGENT,
     CONF_FOLLOW_UP,
+    CONF_HOME_AREAS,
     CONF_LABEL,
     CONF_LOUD_DB,
     CONF_MIN_CONFIDENCE,
@@ -109,6 +112,50 @@ class VoiceAgent(conversation.ConversationEntity):
         self._targets: list[dev.Target] = []
         self._intents: list[dict[str, Any]] = []
         self._turn_ok = False  # this turn ran a command to the end
+        self.habits = Habits(hass)
+        self._correcting = False
+        # who is asking in the current turn: (who, their usual room)
+        self._who: tuple[str, str | None] = ("", None)
+        # the room the agent picked by itself, per conversation, for «ні, на кухні»
+        self._last_auto: dict[str, tuple[str, str, str, list[str], float]] = {}
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        await self.habits.async_load()
+
+    def who(self, user_input: conversation.ConversationInput) -> tuple[str, str | None, str]:
+        """(key for habits, usual room, words for the service about who is speaking)."""
+        user_id = user_input.context.user_id if user_input.context else None
+        person = next((s for s in self.hass.states.async_all("person")
+                       if user_id and s.attributes.get("user_id") == user_id), None)
+        if person is not None:
+            try:
+                homes = parse_home_areas(self._opt(CONF_HOME_AREAS, ""))
+            except HomeAreasError:
+                homes = {}
+            area = self._area_name(homes.get(person.entity_id))
+            name = person.attributes.get("friendly_name") or person.entity_id
+            words = f"Говорить {name}" + (f"; кімната цієї людини — {area}" if area else "") + "."
+            return person.entity_id, area, words
+        device_id = user_input.device_id
+        if not device_id and user_input.satellite_id:
+            sat = er.async_get(self.hass).async_get(user_input.satellite_id)
+            device_id = sat.device_id if sat else None
+        if device_id:
+            device = dr.async_get(self.hass).async_get(device_id)
+            area = None
+            if device and device.area_id:
+                entry = ar.async_get(self.hass).async_get_area(device.area_id)
+                area = entry.name if entry else None
+            return f"sat:{device_id}", area, (f"Команда з пристрою в кімнаті «{area}»." if area else "")
+        return "", None, ""
+
+    def _area_name(self, name: str | None) -> str | None:
+        if not name:
+            return None
+        found = next((a.name for a in ar.async_get(self.hass).async_list_areas()
+                      if a.name.casefold() == name.casefold()), None)
+        return found
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -226,6 +273,9 @@ class VoiceAgent(conversation.ConversationEntity):
         self._pending = {k: p for k, p in self._pending.items() if p.expires > now}
         pending = self._pending.pop(conv_id, None)
         self._turn_ok = False
+        who, home, speaker = self.who(user_input)
+        self._who = (who, home)
+        self._correcting = False
         follow = bool(pending and pending.follow)
         quiet = silent or follow  # nothing recognised -> just stop listening
 
@@ -267,7 +317,7 @@ class VoiceAgent(conversation.ConversationEntity):
             if command and intent_spec:
                 ctx = (f"Асистент спитав: «{pending.question}» щодо команди «{command.title}»; "
                        f"людина відповідає на це питання. Уже відомо: "
-                       f"{describe_slots(command, current['slots']) or 'нічого'}.")
+                       f"{describe_slots(command, current['slots']) or 'нічого'}. {speaker}").strip()
                 try:
                     found = await self._client.match(text, [intent_spec], ctx, conv_id)
                 except ServiceError as err:
@@ -286,6 +336,8 @@ class VoiceAgent(conversation.ConversationEntity):
         context = pending.context if pending and pending.kind == "context" else ""
         if pending and pending.kind == "context" and pending.question:
             context = f"Асистент щойно сказав: «{pending.question}». {context}".strip()
+        context = f"{context} {speaker}".strip()
+        self._correcting = _norm(text).startswith(("ні ", "не ", "ні,")) or _norm(text) == "ні"
 
         matches: list[dict[str, Any]] = []
         if intents:
@@ -338,9 +390,11 @@ class VoiceAgent(conversation.ConversationEntity):
                 return
 
             if command.script.startswith(dev.PREFIX):
-                question = await self._run_builtin(user_input, command, slots, reply)
-                if question:
-                    self._ask(conv_id, Pending("slot", question, [match, *queue[i + 1:]], "device"))
+                asked = await self._run_builtin(user_input, conv_id, command, slots, reply)
+                if asked:
+                    question, slot_name, options = asked
+                    self._ask(conv_id, Pending("slot", question, [match, *queue[i + 1:]], slot_name,
+                                               options=options))
                     reply.ask(question)
                     return
                 continue
@@ -373,18 +427,67 @@ class VoiceAgent(conversation.ConversationEntity):
             return None
         return result if isinstance(result, dict) else {}
 
+    @staticmethod
+    def _habit_key(slots: dict[str, Any]) -> str:
+        """What the habit is about: the device name without the room, else the group."""
+        device = str(slots.get("device") or "")
+        if device:
+            return device.split(" (")[0].strip().casefold()
+        return f"group:{slots.get('kind')}" if slots.get("kind") else ""
+
     async def _run_builtin(
-        self, user_input: conversation.ConversationInput, command: Command,
+        self, user_input: conversation.ConversationInput, conv_id: str, command: Command,
         slots: dict[str, Any], reply: _Reply,
-    ) -> str | None:
-        """Runs a universal device command; returns a question if the target is unclear."""
+    ) -> tuple[str, str, list[str]] | None:
+        """Runs a universal device command; returns (question, slot, options) if unclear."""
         name = command.script
         if name == dev.ACTIVATE:
             targets = dev.resolve(self._targets, {"device": slots.get("name")}, dev.ACTIVATABLE)
         else:
             targets = dev.resolve(self._targets, slots)
         if not targets:
-            return "Який саме пристрій?"
+            return "Який саме пристрій?", "device", []
+
+        who, home = self._who
+        key = self._habit_key(slots) if name != dev.ACTIVATE else ""
+        named_room = slots.get("area") or (
+            slots.get("device") and dev.names_room(self._targets, str(slots["device"])))
+        rooms = sorted({t.area for t in targets if t.area})
+        auto_room = None
+        if name != dev.ACTIVATE and len(rooms) > 1 and not named_room and not slots.get("all"):
+            auto_room = self.habits.choose(who, key, rooms, home)
+            if auto_room is None:
+                if slots.get("device"):
+                    options = [dev.label_of(t) for t in targets if t.area][:10]
+                    return (f"Де саме: {', '.join(rooms)}?", "device", options)
+                return (f"У якій кімнаті: {', '.join(rooms)}?", "area", rooms[:10])
+            targets = [t for t in targets if t.area == auto_room]
+
+        chosen_room = slots.get("area") or next((t.area for t in targets if t.area), None)
+        if name != dev.ACTIVATE and key and named_room and chosen_room and len({t.area for t in targets}) == 1:
+            last = self._last_auto.get(conv_id)
+            if self._correcting and last and last[0] == key and last[1] != chosen_room \
+                    and time.monotonic() - last[4] < PENDING_TTL_S:
+                # «ні, на кухні»: the guess was wrong; undo it and learn
+                self.habits.record(who, key, last[1], -1.0)
+                self.habits.record(who, key, chosen_room, 2.0)
+                if name == dev.ON_OFF and last[2] in ("on", "off"):
+                    undo = "off" if last[2] == "on" else "on"
+                    for eid in last[3]:
+                        domain, service = dev.on_off_call(eid, undo)
+                        try:
+                            await self.hass.services.async_call(
+                                domain, service, {"entity_id": eid}, blocking=True,
+                                context=user_input.context)
+                        except HomeAssistantError as err:
+                            _LOGGER.warning("undo %s failed: %s", eid, err)
+                self._last_auto.pop(conv_id, None)
+            else:
+                self.habits.record(who, key, chosen_room)
+        if auto_room:
+            self._last_auto[conv_id] = (key, auto_room, str(slots.get("action", "")),
+                                        [t.entity_id for t in targets], time.monotonic())
+
         services = self.hass.services
         done: list[str] = []
         try:
@@ -403,7 +506,7 @@ class VoiceAgent(conversation.ConversationEntity):
                     domain, service, data = call
                 await services.async_call(domain, service, {"entity_id": t.entity_id, **data},
                                           blocking=True, context=user_input.context)
-                done.append(t.name)
+                done.append(dev.label_of(t) if auto_room else t.name)
         except (HomeAssistantError, ValueError, KeyError) as err:
             _LOGGER.warning("%s failed: %s", name, err)
             reply.say(f"Не вдалося: {err}")
@@ -433,6 +536,8 @@ class VoiceAgent(conversation.ConversationEntity):
             return list(pending.options)
         if pending.kind != "slot" or not pending.matches:
             return []
+        if pending.options:
+            return list(pending.options)
         current = pending.matches[0]
         if pending.slot == "device" and current["intent"].startswith(dev.PREFIX):
             slots = current.get("slots") or {}

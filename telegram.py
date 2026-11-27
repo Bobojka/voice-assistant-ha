@@ -217,6 +217,12 @@ class TelegramBridge:
         speech = (result.response.speech.get("plain") or {}).get("speech", "").strip()
         if not speech:
             _LOGGER.debug("telegram: nothing recognised in %r", text)
+            try:  # a quiet «didn't get it» that does not get in other services' way
+                await self.api("setMessageReaction", {
+                    "chat_id": chat_id, "message_id": reply_to,
+                    "reaction": [{"type": "emoji", "emoji": "🤷"}]}, timeout=5)
+            except ServiceError:
+                pass
             return
         params: dict[str, Any] = {
             "chat_id": chat_id,

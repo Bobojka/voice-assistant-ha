@@ -101,8 +101,12 @@ async def test_silent_when_nothing_matched(hass, bridge, aioclient_mock):
     b, _, _ = bridge
     aioclient_mock.post(f"{URL}/v1/match", json={"matches": []})
     aioclient_mock.post(f"{TG}/bot{TOKEN}/sendChatAction", json={"ok": True, "result": True})
+    aioclient_mock.post(f"{TG}/bot{TOKEN}/setMessageReaction", json={"ok": True, "result": True})
     await b.handle(message(983470091, text="купи молоко"))
     assert not sent(aioclient_mock, "sendMessage")
+    [reaction] = sent(aioclient_mock, "setMessageReaction")  # a quiet «didn't get it»
+    assert reaction["reaction"] == [{"type": "emoji", "emoji": "🤷"}]
+    assert reaction["message_id"] == 10
 
 
 async def test_voice_is_transcribed_with_hints(hass, bridge, aioclient_mock):

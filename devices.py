@@ -78,16 +78,25 @@ def exposed_targets(hass: HomeAssistant, skip: set[str]) -> list[Target]:
     return targets
 
 
+def label_of(t: Target) -> str:
+    return f"{t.name} ({t.area})" if t.area else str(t.name)
+
+
 def _names(targets: list[Target], domains: tuple[str, ...] | None = None,
            exclude: tuple[str, ...] = ()) -> list[str]:
+    """Labels «Name (Room)»; a name found in several rooms also goes without
+    the room, for requests that do not name it (the agent then picks the room)."""
     out: list[str] = []
+    rooms: dict[str, set[str]] = {}
     for t in targets:
         d = t.entity_id.split(".")[0]
         if (domains and d not in domains) or d in exclude:
             continue
-        label = f"{t.name} ({t.area})" if t.area else str(t.name)
+        label = label_of(t)
         if label and label not in out:
             out.append(label)
+        rooms.setdefault(str(t.name), set()).add(t.area or "")
+    out += [name for name, areas in rooms.items() if len(areas) > 1 and name not in out]
     return out[:1000]
 
 
@@ -103,19 +112,22 @@ def build_device_intents(targets: list[Target], areas: list[str]) -> list[dict[s
     intents: list[dict[str, Any]] = []
     if devices:
         device_slot = {"name": "device", "type": "enum", "values": devices,
-                       "description": "Конкретний пристрій, як його назвали (у дужках — кімната)"}
+                       "description": "Конкретний пристрій, як його назвали (у дужках — кімната). Якщо "
+                                      "кімнату не назвали, а пристрій є в кількох — назва без дужок"}
+        all_slot = {"name": "all", "type": "boolean", "stt_hint": False,
+                    "description": "true лише якщо сказали «все/усе/всюди/скрізь/по всій квартирі»"}
         intents += [
             {"name": ON_OFF,
              "description": "Увімкнути, вимкнути або перемкнути пристрій чи групу пристроїв у кімнаті; "
                             "відкрити/закрити штори, замкнути/відімкнути замок теж сюди.",
-             "slots": [device_slot, area_slot, kind_slot,
+             "slots": [device_slot, area_slot, kind_slot, all_slot,
                        {"name": "action", "type": "enum", "required": True, "stt_hint": False,
                         "values": ["on", "off", "toggle"],
                         "description": "увімкни/відкрий/замкни -> on, вимкни/закрий/відімкни -> off, перемкни -> toggle"}],
              "examples": ["увімкни кондиціонер", "вимкни все світло на кухні", "закрий штори в спальні"]},
             {"name": SET_LEVEL,
              "description": "Задати рівень: яскравість, температуру, гучність, положення штор, швидкість вентилятора, значення.",
-             "slots": [device_slot, area_slot, kind_slot,
+             "slots": [device_slot, area_slot, kind_slot, all_slot,
                        {"name": "value", "type": "number", "required": True,
                         "description": "Число: відсотки для яскравості/гучності/положення, градуси для температури"}],
              "examples": ["постав кондиціонер на 23", "яскравість світла у вітальні 40 відсотків",
@@ -136,8 +148,16 @@ def build_device_intents(targets: list[Target], areas: list[str]) -> list[dict[s
 
 
 def _match_label(targets: list[Target], label: str) -> list[Target]:
-    return [t for t in targets
-            if (f"{t.name} ({t.area})" if t.area else str(t.name)) == label]
+    exact = [t for t in targets if label_of(t) == label]
+    if exact:
+        return exact
+    # a name without the room: every room that has it
+    return [t for t in targets if str(t.name).casefold() == str(label).casefold()]
+
+
+def names_room(targets: list[Target], label: str) -> bool:
+    """The device label itself says which room («Підсвітка (Кухня)»)."""
+    return any(label_of(t) == label and t.area for t in targets)
 
 
 def resolve(targets: list[Target], slots: dict[str, Any],
@@ -145,6 +165,8 @@ def resolve(targets: list[Target], slots: dict[str, Any],
     """Device by its label, else area + kind; filtered to domains if given."""
     if slots.get("device"):
         found = _match_label(targets, slots["device"])
+        if slots.get("area"):
+            found = [t for t in found if t.area == slots["area"]] or found
     else:
         kind_domains = KINDS.get(slots.get("kind") or "", None)
         area = slots.get("area")

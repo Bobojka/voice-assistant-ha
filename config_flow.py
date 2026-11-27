@@ -12,16 +12,19 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .client import ServiceError, VoiceServiceClient
+from .habits import HomeAreasError, parse_home_areas, unknown_areas
 from .telegram import UsersError, parse_users
 from .const import (
     CONF_ASSISTANT_NAME,
     CONF_DEVICES,
     CONF_FALLBACK_AGENT,
     CONF_FOLLOW_UP,
+    CONF_HOME_AREAS,
     CONF_LABEL,
     CONF_LOUD_DB,
     CONF_MIN_CONFIDENCE,
     CONF_QUIET_DB,
+    CONF_RESET_HABITS,
     CONF_TG_TOKEN,
     CONF_TG_URL,
     CONF_TG_USERS,
@@ -64,6 +67,9 @@ def _options_schema(values: dict[str, Any]) -> vol.Schema:
                      default=values.get(CONF_FALLBACK_AGENT, DEFAULT_FALLBACK_AGENT)): str,
         vol.Required(CONF_DEVICES, default=values.get(CONF_DEVICES, True)): bool,
         vol.Required(CONF_FOLLOW_UP, default=values.get(CONF_FOLLOW_UP, DEFAULT_FOLLOW_UP)): bool,
+        vol.Optional(CONF_HOME_AREAS, default=values.get(CONF_HOME_AREAS, "")): selector.TextSelector(
+            selector.TextSelectorConfig(multiline=True)),
+        vol.Optional(CONF_RESET_HABITS, default=False): bool,
         vol.Required(CONF_VOLUME_ADAPT,
                      default=values.get(CONF_VOLUME_ADAPT, DEFAULT_VOLUME_ADAPT)): bool,
         vol.Required(CONF_VOLUME_MIN, default=values.get(CONF_VOLUME_MIN, DEFAULT_VOLUME_MIN)):
@@ -124,7 +130,20 @@ class VoiceAssistantOptionsFlow(OptionsFlow):
             else:
                 if any(self.hass.states.get(p) is None for p in users.values()):
                     errors[CONF_TG_USERS] = "unknown_person"
+            try:
+                homes = parse_home_areas(user_input.get(CONF_HOME_AREAS, ""))
+            except HomeAreasError:
+                errors[CONF_HOME_AREAS] = "bad_home_areas"
+            else:
+                if any(self.hass.states.get(p) is None for p in homes):
+                    errors[CONF_HOME_AREAS] = "unknown_person"
+                elif unknown_areas(self.hass, homes):
+                    errors[CONF_HOME_AREAS] = "unknown_area"
             if not errors:
+                if user_input.pop(CONF_RESET_HABITS, False):
+                    agent = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+                    if agent is not None:
+                        agent.habits.reset()
                 return self.async_create_entry(data=user_input)
             values = user_input
         else:

@@ -35,13 +35,17 @@
           "volume_max": "Loudest answer volume",
           "quiet_db": "Quiet request, dBFS (see the voice level sensor)",
           "loud_db": "Loud request, dBFS",
-          "follow_up": "Keep listening after a command on a satellite (no wake word for «and also ...»)"
+          "follow_up": "Keep listening after a command on a satellite (no wake word for «and also ...»)",
+          "home_areas": "Each person's room, one per line: person.name = Room (default for commands without a room)",
+          "reset_habits": "Forget learned habits (which room each person usually means)"
         }
       }
     },
     "error": {
       "bad_users": "Each line: telegram_id = person.name, e.g. 983470091 = person.dima",
-      "unknown_person": "No such person in Home Assistant"
+      "unknown_person": "No such person in Home Assistant",
+      "bad_home_areas": "Each line: person.name = Room",
+      "unknown_area": "No such area in Home Assistant"
     }
   }
 }
