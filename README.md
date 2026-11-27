@@ -1,3 +1,5 @@
+<p align="center"><img src="brand/logo.png" alt="Voice Assistant" height="96"></p>
+
 # Voice Assistant HA
 
 Голосовий агент для Home Assistant: розуміє довільні українські фрази і виконує **скрипти з міткою «Голос»**.
