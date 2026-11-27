@@ -16,7 +16,7 @@ def test_vacuum_and_humidifier_calls():
 
 
 def test_binary_sensor_answers_yes_no():
-    assert dev.describe_state("Прокинувся: Влад", State("binary_sensor.v", "on")) == "Прокинувся: Влад: так."
+    assert dev.describe_state("Прокинувся: Влад", State("binary_sensor.v", "on")) == "Прокинувся: Влад — так."
     assert dev.describe_state("Електрика", State("binary_sensor.p", "off", {"device_class": "power"})) == "Електрика: немає."
 
 
@@ -57,3 +57,22 @@ async def test_spoken_name_prefers_alias(hass):
     assert spoken_name(hass, e.entity_id, "garland Гірлянда") == "garland Гірлянда"
     reg.async_update_entity(e.entity_id, aliases={"Гірлянда"})
     assert spoken_name(hass, e.entity_id, "garland Гірлянда") == "Гірлянда"
+
+
+async def test_spoken_name_drops_model_prefix(hass):
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.voice_assistant_ha.devices import describe_state, spoken_name
+    entry = MockConfigEntry(domain="test")
+    entry.add_to_hass(hass)
+    devs, reg = dr.async_get(hass), er.async_get(hass)
+    phone = devs.async_get_or_create(config_entry_id=entry.entry_id, identifiers={("t", "p")},
+                                     name="Redmi Note 9 Pro")
+    ac = devs.async_get_or_create(config_entry_id=entry.entry_id, identifiers={("t", "a")},
+                                  name="Кондиціонер")
+    e1 = reg.async_get_or_create("binary_sensor", "t", "1", device_id=phone.id)
+    e2 = reg.async_get_or_create("switch", "t", "2", device_id=ac.id)
+    assert spoken_name(hass, e1.entity_id, "Redmi Note 9 Pro Прокинувся: Влад") == "Прокинувся: Влад"
+    assert spoken_name(hass, e2.entity_id, "Кондиціонер Сон") == "Кондиціонер Сон"
+    hass.states.async_set(e1.entity_id, "off")
+    assert describe_state("Прокинувся: Влад", hass.states.get(e1.entity_id)) == "Прокинувся: Влад — ні."

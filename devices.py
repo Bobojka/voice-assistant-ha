@@ -85,6 +85,13 @@ def spoken_name(hass: HomeAssistant, entity_id: str, fallback: str) -> str:
     for alias in (entry.aliases if entry else ()) or ():
         if isinstance(alias, str) and alias.strip():
             return alias.strip()
+    # «Redmi Note 9 Pro Прокинувся: Влад» -> «Прокинувся: Влад»: a device name with no
+    # Cyrillic is a model or a technical name; a Ukrainian one («Кондиціонер Сон») stays.
+    device = dr.async_get(hass).async_get(entry.device_id) if entry and entry.device_id else None
+    prefix = (device.name_by_user or device.name or "") if device else ""
+    if (prefix and fallback.startswith(prefix + " ") and len(fallback) > len(prefix) + 1
+            and not any("а" <= c.lower() <= "я" or c.lower() in "єіїґ" for c in prefix)):
+        return fallback[len(prefix) + 1:]
     return fallback
 
 
@@ -290,8 +297,10 @@ def spoken_time(value: str) -> str | None:
 
 
 def describe_state(name: str, state: State | None) -> str:
+    # «Прокинувся: Влад: ні» reads badly: a name that has a colon gets a dash
+    head = f"{name} —" if ":" in name else f"{name}:"
     if state is None:
-        return f"{name}: невідомо."
+        return f"{head} невідомо."
     if state.domain == "weather":
         a = state.attributes
         parts = [_WEATHER.get(state.state, state.state)]
@@ -305,14 +314,14 @@ def describe_state(name: str, state: State | None) -> str:
         return f"Погода: {', '.join(parts)}."
     if state.domain == "binary_sensor" and state.state in ("on", "off"):
         yes, no = _BINARY.get(state.attributes.get("device_class") or "", ("так", "ні"))
-        return f"{name}: {yes if state.state == 'on' else no}."
+        return f"{head} {yes if state.state == 'on' else no}."
     if state.attributes.get("device_class") == "timestamp" or state.domain in ("input_datetime",):
         spoken = spoken_time(state.state)
         if spoken:
-            return f"{name}: {spoken}."
+            return f"{head} {spoken}."
     value = _STATES.get(state.state, state.state)
     unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
-    text = f"{name}: {value}{' ' + unit if unit else ''}"
+    text = f"{head} {value}{' ' + unit if unit else ''}"
     if state.domain == "climate":
         cur = state.attributes.get("current_temperature")
         target = state.attributes.get("temperature")
