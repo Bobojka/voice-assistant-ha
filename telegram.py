@@ -144,6 +144,8 @@ class TelegramBridge:
         person = self.users.get(sender) if sender is not None else None
         if not person:
             return  # not one of ours: someone else's service may answer
+        if (msg.get("chat") or {}).get("type", "private") != "private":
+            return  # group chats are people talking to each other, not to the house
         chat_id = msg["chat"]["id"]
         text = (msg.get("text") or "").strip()
         if text[:1] in ("/", "+", "-", "−", "?"):
