@@ -54,7 +54,8 @@ async def setup(hass: HomeAssistant, aioclient_mock):
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    agent_id = next(e.entity_id for e in reg.entities.values() if e.platform == DOMAIN)
+    agent_id = next(e.entity_id for e in reg.entities.values()
+                    if e.platform == DOMAIN and e.domain == "conversation")
     return calls, agent_id
 
 
@@ -201,3 +202,46 @@ async def test_state_and_unknown_target(hass, devices, aioclient_mock):
          "confidence": 0.9, "warnings": []}]})
     asked = await converse(hass, agent_id, "увімкни")
     assert asked.continue_conversation is True and "пристрій" in asked.response.speech["plain"]["speech"]
+
+
+async def test_stt_sends_home_words(hass: HomeAssistant, setup, aioclient_mock):
+    from homeassistant.components import stt
+
+    hass.states.async_set("light.kitchen", "off", {"friendly_name": "Лампа"})
+    aioclient_mock.post(f"{URL}/v1/transcribe", json={"ok": True, "text": " Увімкни лампу "})
+    entity = stt.async_get_speech_to_text_entity(hass, next(
+        e.entity_id for e in er.async_get(hass).entities.values()
+        if e.platform == DOMAIN and e.domain == "stt"))
+
+    async def audio():
+        yield b"\x00\x00" * 1600
+
+    meta = stt.SpeechMetadata(language="uk-UA", format=stt.AudioFormats.WAV,
+                              codec=stt.AudioCodecs.PCM, bit_rate=16, sample_rate=16000,
+                              channel=1)
+    result = await entity.async_process_audio_stream(meta, audio())
+    assert result.result == stt.SpeechResultState.SUCCESS
+    assert result.text == "Увімкни лампу"
+    body = aioclient_mock.mock_calls[-1][2]
+    fields = {f[0]["name"]: f[2] for f in body._fields}
+    assert fields["language"] == "uk"
+    assert "Списати продукт" in fields["vocabulary"]
+    assert fields["file"][:4] == b"RIFF"
+
+
+async def test_stt_service_down(hass: HomeAssistant, setup, aioclient_mock):
+    from homeassistant.components import stt
+
+    aioclient_mock.post(f"{URL}/v1/transcribe", status=503, json={"error": {"code": "x"}})
+    entity = stt.async_get_speech_to_text_entity(hass, next(
+        e.entity_id for e in er.async_get(hass).entities.values()
+        if e.platform == DOMAIN and e.domain == "stt"))
+
+    async def audio():
+        yield b"\x00\x00" * 160
+
+    meta = stt.SpeechMetadata(language="uk", format=stt.AudioFormats.WAV,
+                              codec=stt.AudioCodecs.PCM, bit_rate=16, sample_rate=16000,
+                              channel=1)
+    result = await entity.async_process_audio_stream(meta, audio())
+    assert result.result == stt.SpeechResultState.ERROR

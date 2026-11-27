@@ -29,6 +29,32 @@ class VoiceServiceClient:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise ServiceError(str(err)) from err
 
+    async def transcribe(
+        self, wav: bytes, language: str, vocabulary: list[str], request_id: str = ""
+    ) -> str:
+        """POST /v1/transcribe -> recognised text ('' when there was no speech)."""
+        form = aiohttp.FormData()
+        form.add_field("file", wav, filename="audio.wav", content_type="audio/wav")
+        form.add_field("language", language)
+        form.add_field("vocabulary", ",".join(vocabulary))
+        form.add_field("request_id", request_id)
+        try:
+            async with self._session.post(
+                f"{self._url}/v1/transcribe",
+                data=form,
+                headers=self._headers,
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_S),
+            ) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status != 200:
+                    err = (data or {}).get("error", {}) if isinstance(data, dict) else {}
+                    raise ServiceError(
+                        f"HTTP {resp.status} {err.get('code', '')}: {err.get('message', '')}".strip()
+                    )
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            raise ServiceError(str(err)) from err
+        return str(data.get("text") or "").strip() if data.get("ok") else ""
+
     async def match(
         self, text: str, intents: list[dict[str, Any]], context: str = "", request_id: str = ""
     ) -> list[dict[str, Any]]:

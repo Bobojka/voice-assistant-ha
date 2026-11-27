@@ -11,7 +11,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .client import VoiceServiceClient
 from .const import CONF_TOKEN, CONF_URL
 
-PLATFORMS = [Platform.CONVERSATION]
+PLATFORMS = [Platform.CONVERSATION, Platform.STT]
 
 type VoiceConfigEntry = ConfigEntry[VoiceServiceClient]
 
