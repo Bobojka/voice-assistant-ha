@@ -29,10 +29,12 @@ from homeassistant.helpers import service as service_helper
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import ulid
 
+from . import devices as dev
 from .catalog import Command, build_catalog, describe_slots, yes_no
 from .client import ServiceError, VoiceServiceClient
 from .const import (
     CONF_ASSISTANT_NAME,
+    CONF_DEVICES,
     CONF_FALLBACK_AGENT,
     CONF_LABEL,
     CONF_MIN_CONFIDENCE,
@@ -75,6 +77,7 @@ class VoiceAgent(conversation.ConversationEntity):
         self.entry = entry
         self._attr_unique_id = entry.entry_id
         self._pending: dict[str, Pending] = {}
+        self._targets: list[dev.Target] = []
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -90,17 +93,36 @@ class VoiceAgent(conversation.ConversationEntity):
     # --- catalog -----------------------------------------------------------------
 
     async def _catalog(self) -> tuple[list[dict[str, Any]], dict[str, Command]]:
+        """Scripts with the voice label + (optionally) universal device commands."""
+        intents: list[dict[str, Any]] = []
+        commands: dict[str, Command] = {}
+        labelled: set[str] = set()
+
         label_name = self._opt(CONF_LABEL, DEFAULT_LABEL)
         label = next((lb for lb in lr.async_get(self.hass).async_list_labels()
                       if lb.name.casefold() == label_name.casefold()), None)
-        if label is None:
-            return [], {}
-        entries = er.async_entries_for_label(er.async_get(self.hass), label.label_id)
-        keys = {e.unique_id for e in entries if e.domain == "script" and e.unique_id}
-        if not keys:
-            return [], {}
-        descriptions = (await service_helper.async_get_all_descriptions(self.hass)).get("script", {})
-        return build_catalog({k: descriptions[k] for k in keys if k in descriptions})
+        if label is not None:
+            entries = er.async_entries_for_label(er.async_get(self.hass), label.label_id)
+            scripts = {e.unique_id: e.entity_id for e in entries
+                       if e.domain == "script" and e.unique_id}
+            labelled = set(scripts.values())
+            if scripts:
+                descriptions = (await service_helper.async_get_all_descriptions(self.hass)).get("script", {})
+                intents, commands = build_catalog(
+                    {k: descriptions[k] for k in scripts if k in descriptions})
+
+        self._targets = []
+        if self._opt(CONF_DEVICES, True):
+            self._targets = dev.exposed_targets(self.hass, skip=labelled)
+            areas = sorted({t.area for t in self._targets if t.area})
+            for spec in dev.build_device_intents(self._targets, areas):
+                intents.append(spec)
+                commands[spec["name"]] = Command(
+                    script=spec["name"], title=dev.TITLES[spec["name"]],
+                    fields={"device": "пристрій", "area": "кімната", "action": "дія",
+                            "value": "значення", "name": "назва", "kind": "група"},
+                    required=[sl["name"] for sl in spec["slots"] if sl.get("required")])
+        return intents, commands
 
     # --- entry point -------------------------------------------------------------
 
@@ -207,6 +229,14 @@ class VoiceAgent(conversation.ConversationEntity):
                 reply.ask(question)
                 return
 
+            if command.script.startswith(dev.PREFIX):
+                question = await self._run_builtin(user_input, command, slots, reply)
+                if question:
+                    self._ask(conv_id, Pending("slot", question, [match, *queue[i + 1:]], "device"))
+                    reply.ask(question)
+                    return
+                continue
+
             response = await self._call_script(user_input, command, slots, reply)
             if response is None:
                 continue
@@ -231,6 +261,55 @@ class VoiceAgent(conversation.ConversationEntity):
             reply.say(f"Не вдалося виконати «{command.title}»: {err}")
             return None
         return result if isinstance(result, dict) else {}
+
+    async def _run_builtin(
+        self, user_input: conversation.ConversationInput, command: Command,
+        slots: dict[str, Any], reply: _Reply,
+    ) -> str | None:
+        """Runs a universal device command; returns a question if the target is unclear."""
+        name = command.script
+        if name == dev.ACTIVATE:
+            targets = dev.resolve(self._targets, {"device": slots.get("name")}, dev.ACTIVATABLE)
+        else:
+            targets = dev.resolve(self._targets, slots)
+        if not targets:
+            return "Який саме пристрій?"
+        services = self.hass.services
+        done: list[str] = []
+        try:
+            if name == dev.STATE:
+                reply.say(" ".join(dev.describe_state(t.name, self.hass.states.get(t.entity_id))
+                                   for t in targets[:5]))
+                return None
+            for t in targets:
+                if name in (dev.ON_OFF, dev.ACTIVATE):
+                    domain, service = dev.on_off_call(t.entity_id, slots.get("action", "on"))
+                    data: dict[str, Any] = {}
+                else:
+                    call = dev.level_call(t.entity_id, float(slots["value"]))
+                    if call is None:
+                        continue
+                    domain, service, data = call
+                await services.async_call(domain, service, {"entity_id": t.entity_id, **data},
+                                          blocking=True, context=user_input.context)
+                done.append(t.name)
+        except (HomeAssistantError, ValueError, KeyError) as err:
+            _LOGGER.warning("%s failed: %s", name, err)
+            reply.say(f"Не вдалося: {err}")
+            return None
+        if not done:
+            reply.say("Цей пристрій так не вміє.")
+            return None
+        what = ", ".join(done[:5]) + (f" і ще {len(done) - 5}" if len(done) > 5 else "")
+        if name == dev.ACTIVATE:
+            reply.say(f"Запустила: {what}.")
+        elif name == dev.SET_LEVEL:
+            reply.say(f"Встановила {slots['value']:g}: {what}.")
+        else:
+            verb = {"on": "Увімкнула", "off": "Вимкнула", "toggle": "Перемкнула"}.get(
+                slots.get("action", "on"), "Готово")
+            reply.say(f"{verb}: {what}.")
+        return None
 
     def _ask(self, conv_id: str, pending: Pending) -> None:
         pending.expires = time.monotonic() + PENDING_TTL_S

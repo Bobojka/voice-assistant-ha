@@ -131,3 +131,71 @@ async def test_service_down_falls_back_to_builtin_agent(hass, setup, aioclient_m
     result = await converse(hass, agent_id, "щось незрозуміле зовсім")
     # The built-in agent answered (it does not understand either, but it was asked).
     assert result.response.error_code == "no_intent_match" or result.response.speech
+
+
+@pytest.fixture
+async def devices(hass, setup):
+    from homeassistant.components.homeassistant.exposed_entities import async_expose_entity
+    from homeassistant.helpers import area_registry as ar
+
+    assert await async_setup_component(hass, "input_boolean", {"input_boolean": {
+        "kondytsioner": {"name": "Кондиціонер"},
+        "lampa": {"name": "Лампа"},
+        "hidden": {"name": "Прихований"},
+    }})
+    await hass.async_block_till_done()
+    kitchen = ar.async_get(hass).async_create("Кухня")
+    reg = er.async_get(hass)
+    reg.async_update_entity("input_boolean.lampa", area_id=kitchen.id)
+    for eid in ("input_boolean.kondytsioner", "input_boolean.lampa"):
+        async_expose_entity(hass, "conversation", eid, True)
+    async_expose_entity(hass, "conversation", "input_boolean.hidden", False)
+    return setup
+
+
+async def test_catalog_has_universal_device_commands(hass, devices, aioclient_mock):
+    _, agent_id = devices
+    aioclient_mock.post(f"{URL}/v1/match", json={"matches": []})
+    await converse(hass, agent_id, "щось")
+    intents = {i["name"]: i for i in aioclient_mock.mock_calls[0][2]["intents"]}
+    assert {"spysaty", "ha.turn_on_off", "ha.set_level", "ha.state"} <= set(intents)
+    device_values = next(s for s in intents["ha.turn_on_off"]["slots"] if s["name"] == "device")["values"]
+    assert "Кондиціонер" in device_values and "Лампа (Кухня)" in device_values
+    assert not any("Прихований" in v for v in device_values)
+    assert not any("Списати" in v for v in device_values)  # labelled script is not a device
+
+
+async def test_turn_on_by_name(hass, devices, aioclient_mock):
+    _, agent_id = devices
+    aioclient_mock.post(f"{URL}/v1/match", json={"matches": [
+        {"intent": "ha.turn_on_off", "slots": {"device": "Кондиціонер", "area": None, "kind": None,
+                                              "action": "on"}, "confidence": 0.9, "warnings": []}]})
+    result = await converse(hass, agent_id, "угімкни кондиціонер")
+    assert hass.states.get("input_boolean.kondytsioner").state == "on"
+    assert result.response.speech["plain"]["speech"] == "Увімкнула: Кондиціонер."
+
+
+async def test_turn_off_by_area_and_kind(hass, devices, aioclient_mock):
+    _, agent_id = devices
+    await hass.services.async_call("input_boolean", "turn_on", {"entity_id": "all"}, blocking=True)
+    aioclient_mock.post(f"{URL}/v1/match", json={"matches": [
+        {"intent": "ha.turn_on_off", "slots": {"device": None, "area": "Кухня", "kind": "розетки й перемикачі",
+                                              "action": "off"}, "confidence": 0.9, "warnings": []}]})
+    await converse(hass, agent_id, "вимкни все на кухні")
+    assert hass.states.get("input_boolean.lampa").state == "off"
+    assert hass.states.get("input_boolean.kondytsioner").state == "on"
+
+
+async def test_state_and_unknown_target(hass, devices, aioclient_mock):
+    _, agent_id = devices
+    aioclient_mock.post(f"{URL}/v1/match", json={"matches": [
+        {"intent": "ha.state", "slots": {"device": "Кондиціонер", "area": None}, "confidence": 0.9, "warnings": []}]})
+    result = await converse(hass, agent_id, "чи увімкнений кондиціонер")
+    assert result.response.speech["plain"]["speech"] == "Кондиціонер: вимкнено."
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(f"{URL}/v1/match", json={"matches": [
+        {"intent": "ha.turn_on_off", "slots": {"device": None, "area": None, "kind": None, "action": "on"},
+         "confidence": 0.9, "warnings": []}]})
+    asked = await converse(hass, agent_id, "увімкни")
+    assert asked.continue_conversation is True and "пристрій" in asked.response.speech["plain"]["speech"]

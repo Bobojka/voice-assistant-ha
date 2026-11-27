@@ -14,6 +14,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .client import ServiceError, VoiceServiceClient
 from .const import (
     CONF_ASSISTANT_NAME,
+    CONF_DEVICES,
     CONF_FALLBACK_AGENT,
     CONF_LABEL,
     CONF_MIN_CONFIDENCE,
@@ -40,6 +41,7 @@ def _options_schema(values: dict[str, Any]) -> vol.Schema:
                 min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.SLIDER)),
         vol.Required(CONF_FALLBACK_AGENT,
                      default=values.get(CONF_FALLBACK_AGENT, DEFAULT_FALLBACK_AGENT)): str,
+        vol.Required(CONF_DEVICES, default=values.get(CONF_DEVICES, True)): bool,
     })
 
 

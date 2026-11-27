@@ -25,7 +25,8 @@
           "label": "Label of voice scripts",
           "assistant_name": "Assistant name",
           "min_confidence": "Ask to confirm below this confidence",
-          "fallback_agent": "Fallback agent (entity id, 'none' to disable)"
+          "fallback_agent": "Fallback agent (entity id, 'none' to disable)",
+          "devices": "Universal commands for devices exposed to Assist"
         }
       }
     }

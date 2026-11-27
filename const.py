@@ -8,6 +8,7 @@ CONF_LABEL = "label"
 CONF_ASSISTANT_NAME = "assistant_name"
 CONF_MIN_CONFIDENCE = "min_confidence"
 CONF_FALLBACK_AGENT = "fallback_agent"
+CONF_DEVICES = "devices"
 
 DEFAULT_URL = "http://192.168.88.100:8300"
 DEFAULT_LABEL = "Голос"

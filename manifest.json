@@ -1,13 +1,17 @@
 {
   "domain": "voice_assistant_ha",
   "name": "Voice Assistant HA",
-  "codeowners": ["@DmytroZamkovyi"],
+  "codeowners": [
+    "@DmytroZamkovyi"
+  ],
   "config_flow": true,
-  "dependencies": ["conversation"],
+  "dependencies": [
+    "conversation"
+  ],
   "documentation": "https://github.com/Bobojka/voice-assistant-ha",
   "integration_type": "service",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Bobojka/voice-assistant-ha/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
