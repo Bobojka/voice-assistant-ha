@@ -26,9 +26,16 @@
           "assistant_name": "Ім'я асистента",
           "min_confidence": "Перепитувати, якщо впевненість нижча за",
           "fallback_agent": "Запасний агент (entity id, 'none' — вимкнути)",
-          "devices": "Універсальні команди для пристроїв, відкритих для Assist"
+          "devices": "Універсальні команди для пристроїв, відкритих для Assist",
+          "telegram_url": "Telegram: адреса Bot API (tg-proxy, напр. http://192.168.88.100:8310, або https://api.telegram.org)",
+          "telegram_token": "Telegram: токен (токен підписника в tg-proxy)",
+          "telegram_users": "Telegram: хто може давати команди, по рядку: <telegram id> = person.<ім'я>"
         }
       }
+    },
+    "error": {
+      "bad_users": "Кожен рядок: <telegram id> = person.<ім'я>",
+      "unknown_person": "Такої людини (person) у Home Assistant немає"
     }
   }
 }

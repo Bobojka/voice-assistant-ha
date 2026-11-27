@@ -12,12 +12,16 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .client import ServiceError, VoiceServiceClient
+from .telegram import UsersError, parse_users
 from .const import (
     CONF_ASSISTANT_NAME,
     CONF_DEVICES,
     CONF_FALLBACK_AGENT,
     CONF_LABEL,
     CONF_MIN_CONFIDENCE,
+    CONF_TG_TOKEN,
+    CONF_TG_URL,
+    CONF_TG_USERS,
     CONF_TOKEN,
     CONF_URL,
     DEFAULT_ASSISTANT_NAME,
@@ -42,6 +46,11 @@ def _options_schema(values: dict[str, Any]) -> vol.Schema:
         vol.Required(CONF_FALLBACK_AGENT,
                      default=values.get(CONF_FALLBACK_AGENT, DEFAULT_FALLBACK_AGENT)): str,
         vol.Required(CONF_DEVICES, default=values.get(CONF_DEVICES, True)): bool,
+        vol.Optional(CONF_TG_URL, default=values.get(CONF_TG_URL, "")): str,
+        vol.Optional(CONF_TG_TOKEN, default=values.get(CONF_TG_TOKEN, "")): selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)),
+        vol.Optional(CONF_TG_USERS, default=values.get(CONF_TG_USERS, "")): selector.TextSelector(
+            selector.TextSelectorConfig(multiline=True)),
     })
 
 
@@ -76,9 +85,21 @@ class VoiceAssistantConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class VoiceAssistantOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
             if not user_input.get(CONF_FALLBACK_AGENT):
                 user_input[CONF_FALLBACK_AGENT] = NO_FALLBACK
-            return self.async_create_entry(data=user_input)
-        values = {**self.config_entry.data, **self.config_entry.options}
-        return self.async_show_form(step_id="init", data_schema=_options_schema(values))
+            try:
+                users = parse_users(user_input.get(CONF_TG_USERS, ""))
+            except UsersError:
+                errors[CONF_TG_USERS] = "bad_users"
+            else:
+                if any(self.hass.states.get(p) is None for p in users.values()):
+                    errors[CONF_TG_USERS] = "unknown_person"
+            if not errors:
+                return self.async_create_entry(data=user_input)
+            values = user_input
+        else:
+            values = {**self.config_entry.data, **self.config_entry.options}
+        return self.async_show_form(step_id="init", data_schema=_options_schema(values),
+                                    errors=errors)

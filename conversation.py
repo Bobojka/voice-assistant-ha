@@ -65,7 +65,10 @@ class Pending:
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    async_add_entities([VoiceAgent(hass, entry)])
+    agent = VoiceAgent(hass, entry)
+    # The Telegram source calls the agent directly (silent when nothing matched).
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = agent
+    async_add_entities([agent])
 
 
 class VoiceAgent(conversation.ConversationEntity):
@@ -129,6 +132,13 @@ class VoiceAgent(conversation.ConversationEntity):
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
+        return await self.process(user_input)
+
+    async def process(
+        self, user_input: conversation.ConversationInput, silent: bool = False
+    ) -> conversation.ConversationResult:
+        """silent: nothing matched -> empty answer, no fallback agent (Telegram:
+        the message may be for another service on the same bot)."""
         conv_id = user_input.conversation_id or ulid.ulid_now()
         text = user_input.text.strip()
         now = time.monotonic()
@@ -189,12 +199,12 @@ class VoiceAgent(conversation.ConversationEntity):
                 matches = await self._client.match(text, intents, context, conv_id)
             except ServiceError as err:
                 _LOGGER.warning("voice service unavailable, using the fallback agent: %s", err)
-                return await self._fallback(user_input, conv_id, reply)
+                return await self._fallback(user_input, conv_id, reply, silent)
         _LOGGER.debug("catalog: %d commands, %d devices; matches: %s",
                       len(intents), len(self._targets), matches)
         matches = [m for m in matches if m.get("intent") in commands]
         if not matches:
-            return await self._fallback(user_input, conv_id, reply)
+            return await self._fallback(user_input, conv_id, reply, silent)
 
         await self._run_queue(user_input, conv_id, matches, commands, reply)
         return reply.result(conv_id)
@@ -320,8 +330,12 @@ class VoiceAgent(conversation.ConversationEntity):
         self._pending[conv_id] = pending
 
     async def _fallback(
-        self, user_input: conversation.ConversationInput, conv_id: str, reply: _Reply
+        self, user_input: conversation.ConversationInput, conv_id: str, reply: _Reply,
+        silent: bool = False,
     ) -> conversation.ConversationResult:
+        if silent:
+            reply.error("")
+            return reply.result(conv_id)
         agent_id = self._opt(CONF_FALLBACK_AGENT, DEFAULT_FALLBACK_AGENT)
         if agent_id and agent_id != NO_FALLBACK and agent_id != self.entity_id:
             try:

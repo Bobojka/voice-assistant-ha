@@ -26,9 +26,16 @@
           "assistant_name": "Assistant name",
           "min_confidence": "Ask to confirm below this confidence",
           "fallback_agent": "Fallback agent (entity id, 'none' to disable)",
-          "devices": "Universal commands for devices exposed to Assist"
+          "devices": "Universal commands for devices exposed to Assist",
+          "telegram_url": "Telegram: Bot API address (tg-proxy, e.g. http://192.168.88.100:8310, or https://api.telegram.org)",
+          "telegram_token": "Telegram: bot token (tg-proxy subscriber token)",
+          "telegram_users": "Telegram: who may give commands, one per line: <telegram id> = person.<name>"
         }
       }
+    },
+    "error": {
+      "bad_users": "Each line: <telegram id> = person.<name>",
+      "unknown_person": "No such person in Home Assistant"
     }
   }
 }
